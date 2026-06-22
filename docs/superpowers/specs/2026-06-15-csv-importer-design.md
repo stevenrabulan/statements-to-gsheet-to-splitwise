@@ -58,6 +58,7 @@ main.py <path…>                       # files and/or directories
   → expand directories to *.csv (+ *.pdf)
   → per file: skip if its hash is already in import_log.json (unless --force)
   → detect adapter (CSV header) or --source → adapter → list[Transaction]
+    (each stamped with the file basename for the column-K note)
   → optional --from/--to filter (date_filter.in_window)
   → dedup against current sheet rows
   → dry-run preview  →  append only the new rows  →  record file in import log
@@ -72,6 +73,7 @@ class Transaction:
     description: str     # merchant / payee
     amount: float        # positive spend, rounded to cents at write
     account: str         # column G label (card or bank account name)
+    source_file: str     # import file basename — used for the column-K note
 ```
 `Transaction` moves from `pdf_parser.py` to `models.py`; `sheets_writer` and all adapters import it from there.
 
@@ -137,6 +139,7 @@ Exact header strings and (for checking) the transfer/payment exclusions are veri
    `(date, round(amount, 2), normalized_description, normalized_account)` where
    `normalized_description = " ".join(description.upper().split())` and
    `normalized_account = account.strip().upper()`.
+   The source filename / column-K note is deliberately **not** part of the key, so the same charge re-exported under a different filename still dedups.
    Rows that don't parse (headers, Amazon formula rows, blanks) are skipped — they simply won't match incoming keys.
 3. For each incoming transaction in order: if its key still has remaining count in the existing multiset, **consume one and skip** (already in the sheet); otherwise **keep it**. The tool does *not* count its own writes — so a genuine repeat charge (two identical $5 coffees, none yet in the sheet) is preserved, while re-importing the same export adds nothing.
 
@@ -145,7 +148,8 @@ This is best-effort: a manually-entered row spelled differently won't match (cou
 ## sheets_writer changes
 
 - Add `read_existing_rows() -> list[list]` — reads the tab's `A:K` (defensive parse: dates as `MM/DD/YYYY`, amounts stripped of `$`/commas; unparseable rows ignored by dedup).
-- `append_transactions()` unchanged (still `USER_ENTERED`, `INSERT_ROWS`, `build_row` layout A=date, B=amount, C=desc, E=✓, G=account, K="Automated by Claude").
+- `append_transactions()` unchanged (still `USER_ENTERED`, `INSERT_ROWS`).
+- `build_row` layout A=date, B=amount, C=desc, E=✓, G=account, **K = provenance note** `split-transactions [<source_file>]` (e.g. `split-transactions [Chase Sapphire Reserve.csv]`) — replaces the old constant `"Automated by Claude"`. Falls back to `split-transactions` if `source_file` is empty.
 
 ## CLI
 
@@ -177,7 +181,8 @@ python main.py <path…> [--account NAME] [--source chase-credit|chase-checking|
 - **`tests/test_routing.py`:** header → correct adapter (incl. Chase credit vs checking); unrecognized header raises; filename stem → account name.
 - **`tests/test_dedup.py`:** exact re-import adds nothing; true repeat charge preserved; partial overlap (sheet has 1, batch has 2 → add 1); unparseable existing rows ignored.
 - **`tests/test_import_log.py`:** unchanged file skipped; `--force` reprocesses; re-export with new content processed; corrupt log → fresh start; log written only on success (not in dry-run).
-- Existing 12 tests stay green (the `pdf_parser`→`chase_pdf` + `models.py` move updates imports only).
+- **`tests/test_sheets_writer.py`:** `build_row` writes K = `split-transactions [<source_file>]` (and falls back to `split-transactions` when empty); `Transaction` gains `source_file`.
+- Existing `date_filter` / `pdf_parser` tests stay green (the `pdf_parser`→`chase_pdf` + `models.py` move updates imports only; the K-note + `source_file` field update `test_sheets_writer`).
 
 ## Out of scope (Phase 1)
 
