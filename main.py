@@ -2,7 +2,7 @@
 """Multi-account CSV (+ PDF fallback) importer for the Splitwise sheet.
 
 Usage:
-    python main.py statements/2026-06/                       # whole month
+    python main.py transactions/2026-06/                     # whole month
     python main.py "Fakecoin Card.csv"
     python main.py statement.pdf --source pdf --account "Chase Sapphire" --year 2026
     python main.py *.csv --dry-run

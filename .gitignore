@@ -9,4 +9,5 @@ __pycache__/
 
 .worktrees/
 import_log.json
-statements/
+transactions/*
+!transactions/README.md
