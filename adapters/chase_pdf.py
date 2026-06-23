@@ -5,6 +5,7 @@ from pathlib import Path
 
 from models import Transaction
 
+NAME = "pdf"
 
 # Matches lines like: "05/20   WHOLE FOODS MARKET   45.67"
 # Negative amounts (payments) are matched but filtered out below.

@@ -8,7 +8,7 @@ import argparse
 from datetime import date
 
 from date_filter import billing_window, in_window
-from pdf_parser import parse_pdf
+from adapters.chase_pdf import parse_pdf
 from sheets_writer import append_transactions
 
 

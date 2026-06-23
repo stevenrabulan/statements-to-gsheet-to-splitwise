@@ -1,4 +1,4 @@
-from pdf_parser import parse_transactions
+from adapters.chase_pdf import parse_transactions
 from models import Transaction
 from datetime import date
 
