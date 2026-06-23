@@ -37,7 +37,7 @@ def test_appends_new_rows(csv_file, tmp_path):
     wr.assert_called_once()
     appended = wr.call_args[0][0]
     assert len(appended) == 1
-    assert appended[0].source_file == "Fakecoin Card.csv"
+    assert appended[0].source_file == f"{csv_file.parent.name}/Fakecoin Card.csv"
     assert appended[0].account == "Fakecoin Card"
 
 

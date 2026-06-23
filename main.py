@@ -90,8 +90,8 @@ def _adapter_and_transactions(path: Path, args, mapping):
         result = adapter.parse(rows, account=account)
         txns, skipped, warnings = result.transactions, result.skipped, result.warnings
 
-    for t in txns:                       # stamp the file basename for the K-note
-        t.source_file = path.name
+    for t in txns:
+        t.source_file = f"{path.parent.name}/{path.name}"
     return adapter.NAME, account, txns, skipped, warnings
 
 
