@@ -60,6 +60,20 @@ def get_sheet_name(service, spreadsheet_id: str, gid: int) -> str:
     raise ValueError(f"No sheet found with gid={gid}")
 
 
+def read_existing_rows() -> list[list]:
+    """Read the tab's A:K for dedup. Returns raw cell values (no parsing)."""
+    creds = _get_credentials()
+    service = build("sheets", "v4", credentials=creds)
+    sheet_name = get_sheet_name(service, SPREADSHEET_ID, SHEET_GID)
+    resp = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=SPREADSHEET_ID, range=f"'{sheet_name}'!A:K")
+        .execute()
+    )
+    return resp.get("values", [])
+
+
 def append_transactions(transactions: list[Transaction]) -> int:
     creds = _get_credentials()
     service = build("sheets", "v4", credentials=creds)

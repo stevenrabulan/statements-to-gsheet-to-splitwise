@@ -1,4 +1,5 @@
 from datetime import date
+from unittest.mock import MagicMock, patch
 from models import Transaction
 from sheets_writer import build_row
 
@@ -33,3 +34,30 @@ def test_build_row_date_format():
 def test_k_note_falls_back_when_source_file_empty():
     row = build_row(_txn(source_file=""))
     assert row[10] == "split-transactions automation"
+
+
+@patch("sheets_writer.build")
+@patch("sheets_writer._get_credentials")
+@patch("sheets_writer.get_sheet_name", return_value="Sheet1")
+def test_read_existing_rows_returns_values(mock_name, mock_creds, mock_build):
+    service = MagicMock()
+    (service.spreadsheets.return_value.values.return_value
+        .get.return_value.execute.return_value) = {"values": [["06/01/2026", "5.00"]]}
+    mock_build.return_value = service
+
+    from sheets_writer import read_existing_rows
+    rows = read_existing_rows()
+    assert rows == [["06/01/2026", "5.00"]]
+
+
+@patch("sheets_writer.build")
+@patch("sheets_writer._get_credentials")
+@patch("sheets_writer.get_sheet_name", return_value="Sheet1")
+def test_read_existing_rows_empty_sheet(mock_name, mock_creds, mock_build):
+    service = MagicMock()
+    (service.spreadsheets.return_value.values.return_value
+        .get.return_value.execute.return_value) = {}
+    mock_build.return_value = service
+
+    from sheets_writer import read_existing_rows
+    assert read_existing_rows() == []
