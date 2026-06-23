@@ -1,16 +1,9 @@
 import re
 import pdfplumber
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-
-@dataclass
-class Transaction:
-    date: date
-    description: str
-    amount: float
-    card_name: str
+from models import Transaction
 
 
 # Matches lines like: "05/20   WHOLE FOODS MARKET   45.67"
@@ -58,7 +51,7 @@ def parse_transactions(
         txn_date = date(txn_year, month, day)
         amount = float(raw_amount.replace(",", "").replace("$", ""))
         results.append(Transaction(date=txn_date, description=description,
-                                   amount=amount, card_name=card_name))
+                                   amount=amount, account=card_name))
     return results
 
 

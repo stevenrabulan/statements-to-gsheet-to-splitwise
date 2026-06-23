@@ -6,13 +6,18 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from pdf_parser import Transaction
+from models import Transaction
 
 SPREADSHEET_ID = "YOUR_SPREADSHEET_ID"
 SHEET_GID = 0
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
 TOKEN_FILE = Path(__file__).parent / "token.json"
+
+
+def _k_note(source_file: str) -> str:
+    sf = (source_file or "").strip()
+    return f"split-transactions automation {sf}" if sf else "split-transactions automation"
 
 
 def build_row(txn: Transaction) -> list:
@@ -23,11 +28,11 @@ def build_row(txn: Transaction) -> list:
         "",
         True,
         "",
-        txn.card_name,
+        txn.account,
         "",
         "",
         "",
-        "Automated by Claude",
+        _k_note(txn.source_file),
     ]
 
 

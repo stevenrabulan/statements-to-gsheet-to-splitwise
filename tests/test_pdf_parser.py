@@ -1,4 +1,5 @@
-from pdf_parser import parse_transactions, Transaction
+from pdf_parser import parse_transactions
+from models import Transaction
 from datetime import date
 
 SAMPLE_TEXT = """
@@ -21,7 +22,7 @@ def test_transaction_fields():
     assert t.date == date(2026, 5, 20)
     assert t.description == "WHOLE FOODS MARKET"
     assert t.amount == 45.67
-    assert t.card_name == "Chase Sapphire"
+    assert t.account == "Chase Sapphire"
 
 def test_excludes_payments():
     txns = parse_transactions(SAMPLE_TEXT, card_name="Chase Sapphire", year=2026)
