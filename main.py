@@ -1,66 +1,160 @@
 #!/usr/bin/env python3
-"""
+"""Multi-account CSV (+ PDF fallback) importer for the Splitwise sheet.
+
 Usage:
-    python main.py statement.pdf --card "Chase Sapphire" --year 2026
-    python main.py *.pdf --card "Chase Sapphire"
+    python main.py statements/2026-06/                       # whole month
+    python main.py "Fakecoin Card.csv"
+    python main.py statement.pdf --source pdf --account "Chase Sapphire" --year 2026
+    python main.py *.csv --dry-run
 """
 import argparse
-from datetime import date
+import sys
+from datetime import date, datetime
+from pathlib import Path
 
-from date_filter import billing_window, in_window
-from adapters.chase_pdf import parse_pdf
-from sheets_writer import append_transactions
+import import_log
+from adapters import detect_adapter, account_name, SOURCE_MAP
+from models import ImporterError
+from csv_reader import read_csv
+from dedup import dedup, existing_keys_from_rows
+from date_filter import in_window
+from sheets_writer import (
+    CREDENTIALS_FILE,
+    append_transactions,
+    read_existing_rows,
+)
+
+CREDENTIALS_FILE_EXISTS = CREDENTIALS_FILE.exists()
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Import spending CSV/PDF exports into the Splitwise sheet.")
+    p.add_argument("paths", nargs="+", help="Files and/or directories to import")
+    p.add_argument("--account", help="Override account label (sheet column G); single-file use")
+    p.add_argument("--source", choices=sorted(SOURCE_MAP), help="Force a specific adapter")
+    p.add_argument("--from", dest="date_from", help="Only import on/after YYYY-MM-DD")
+    p.add_argument("--to", dest="date_to", help="Only import on/before YYYY-MM-DD")
+    p.add_argument("--year", type=int, default=date.today().year, help="Year for PDF MM/DD dates")
+    p.add_argument("--force", action="store_true", help="Reprocess files already in the import log")
+    p.add_argument("--dry-run", action="store_true", help="Preview only; write nothing")
+    return p.parse_args(argv)
+
+
+def gather_files(paths: list[str]) -> list[Path]:
+    """Expand directories to *.csv + *.pdf; validate every path exists."""
+    files: list[Path] = []
+    for raw in paths:
+        p = Path(raw)
+        if not p.exists():
+            sys.exit(f"ERROR: path not found: {raw}")
+        if p.is_dir():
+            files.extend(sorted(p.glob("*.csv")))
+            files.extend(sorted(p.glob("*.pdf")))
+        else:
+            files.append(p)
+    return files
+
+
+def _parse_date_arg(value: str | None, label: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        sys.exit(f"ERROR: --{label} must be YYYY-MM-DD, got {value!r}")
+
+
+def _adapter_and_transactions(path: Path, args):
+    """Route a single file and return (adapter_name, account, transactions, skipped, warnings)."""
+    account = args.account or account_name(str(path))
+    if args.source:
+        adapter = SOURCE_MAP[args.source]
+    elif path.suffix.lower() == ".pdf":
+        adapter = SOURCE_MAP["pdf"]
+    else:
+        header, _rows = read_csv(path)
+        adapter = detect_adapter(header)
+
+    if adapter.NAME == "pdf":
+        txns = adapter.parse_pdf(path, card_name=account, year=args.year)
+        skipped, warnings = {}, []
+    else:
+        header, rows = read_csv(path)
+        result = adapter.parse(rows, account=account)
+        txns, skipped, warnings = result.transactions, result.skipped, result.warnings
+
+    for t in txns:                       # stamp the file basename for the K-note
+        t.source_file = path.name
+    return adapter.NAME, account, txns, skipped, warnings
+
+
+def run(args) -> None:
+    files = gather_files(args.paths)
+    date_from = _parse_date_arg(args.date_from, "from")
+    date_to = _parse_date_arg(args.date_to, "to")
+
+    log_path = import_log.LOG_PATH
+    log = import_log.load_log(log_path)
+    can_dedup = CREDENTIALS_FILE_EXISTS
+    existing = existing_keys_from_rows(read_existing_rows()) if can_dedup else None
+    if not can_dedup:
+        print("WARNING: credentials.json absent — dedup skipped (parse-only preview).")
+
+    to_append = []
+    pending_log_entries = []
+    for path in files:
+        sha = import_log.file_hash(path)
+        seen = import_log.find_by_hash(sha, log)
+        if seen and not args.force:
+            print(f"{path.name}: already imported {seen.get('imported_at', '?')} — skipping (use --force).")
+            continue
+
+        try:
+            name, account, txns, skipped, warnings = _adapter_and_transactions(path, args)
+        except ImporterError as exc:
+            sys.exit(f"ERROR in {path.name}: {exc}")
+        if date_from or date_to:
+            lo = date_from or date.min
+            hi = date_to or date.max
+            txns = [t for t in txns if in_window(t.date, lo, hi)]
+
+        new = dedup(txns, existing) if can_dedup else txns
+        for w in warnings:
+            print(f"  WARN {path.name}: {w}")
+        print(f"{path.name}: adapter={name} account={account!r} "
+              f"parsed={len(txns)} skipped={dict(skipped)} new={len(new)}")
+
+        if new:
+            dates = [t.date.isoformat() for t in new]
+            pending_log_entries.append({
+                "file": str(path), "sha256": sha, "account": account, "source": name,
+                "rows_new": len(new), "rows_skipped": int(sum(skipped.values())),
+                "date_range": [min(dates), max(dates)],
+            })
+            to_append.extend(new)
+
+    if not to_append:
+        print("Nothing new to write.")
+        return
+
+    to_append.sort(key=lambda t: t.date)
+    print(f"\n{'DRY RUN — ' if args.dry_run else ''}{len(to_append)} row(s) to append:")
+    for t in to_append:
+        print(f"  {t.date}  {t.description:<40}  ${t.amount:.2f}  [{t.account}]")
+
+    if args.dry_run:
+        print("\n(Dry run — nothing written, import log untouched.)")
+        return
+
+    written = append_transactions(to_append)
+    print(f"\nWrote {written} rows to the sheet.")
+    for entry in pending_log_entries:                        # record only on success
+        entry["imported_at"] = datetime.now().isoformat()
+        import_log.append_entry(entry, log_path)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Copy credit card PDF transactions to Google Sheets."
-    )
-    parser.add_argument("pdfs", nargs="+", help="Path(s) to PDF statement(s)")
-    parser.add_argument("--card", required=True, help='Card name, e.g. "Chase Sapphire"')
-    parser.add_argument(
-        "--year",
-        type=int,
-        default=date.today().year,
-        help="Year for MM/DD dates in the statement (default: current year)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print rows without writing to the sheet",
-    )
-    args = parser.parse_args()
-
-    start, end = billing_window()
-    print(f"Billing window: {start} → {end}")
-
-    all_transactions = []
-    for pdf_path in args.pdfs:
-        print(f"Parsing {pdf_path}...")
-        txns = parse_pdf(pdf_path, card_name=args.card, year=args.year, billing_start=start)
-        if not txns:
-            print(f"  WARNING: No transactions found in {pdf_path}. "
-                  "The PDF format may not match the expected pattern. "
-                  "See pdf_parser.py to adapt the regex.")
-        in_range = [t for t in txns if in_window(t.date, start, end)]
-        print(f"  Found {len(txns)} transactions, {len(in_range)} in window")
-        all_transactions.extend(in_range)
-
-    if not all_transactions:
-        print("No transactions to write.")
-        return
-
-    all_transactions.sort(key=lambda t: t.date)
-
-    print(f"\n{'DRY RUN — ' if args.dry_run else ''}Writing {len(all_transactions)} rows:")
-    for t in all_transactions:
-        print(f"  {t.date}  {t.description:<40}  ${t.amount:.2f}")
-
-    if not args.dry_run:
-        written = append_transactions(all_transactions)
-        print(f"\nWrote {written} rows to Google Sheet.")
-    else:
-        print("\n(Dry run — nothing written)")
+    run(parse_args())
 
 
 if __name__ == "__main__":

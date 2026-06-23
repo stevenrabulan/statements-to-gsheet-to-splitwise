@@ -9,3 +9,4 @@ __pycache__/
 
 .worktrees/
 import_log.json
+statements/
