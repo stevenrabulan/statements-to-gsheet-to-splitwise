@@ -91,15 +91,15 @@ You can also pass individual files instead of entire directories:
 
 ## Command Line Arguments & Options
 
-| Flag / Option | Description | Example |
-| :--- | :--- | :--- |
-| `--dry-run` | Preview the import in the console. Does not write to Google Sheets or log files. | `--dry-run` |
-| `--force` | Force reprocessing of files that have already been imported (overrides the import log check). | `--force` |
-| `--from YYYY-MM-DD` | Only import transactions dated on or after the specified date. | `--from 2026-06-01` |
-| `--to YYYY-MM-DD` | Only import transactions dated on or before the specified date. | `--to 2026-06-30` |
-| `--account "NAME"` | Manually set/override the sheet's account label (Column G). Use with single files. | `--account "Chase Checking"` |
-| `--source ADAPTER` | Force the use of a specific parser adapter (`fakecoin`, `discover`, `chase_checking`, `chase_credit`, `pdf`). | `--source fakecoin` |
-| `--year YYYY` | Specify the calendar year for PDF statements (as credit card PDFs often omit the year on transaction lines). | `--year 2026` |
+| Flag / Option       | Description                                                                                                   | Example                      |
+| :--------------------| :--------------------------------------------------------------------------------------------------------------| :-----------------------------|
+| `--dry-run`         | Preview the import in the console. Does not write to Google Sheets or log files.                              | `--dry-run`                  |
+| `--force`           | Force reprocessing of files that have already been imported (overrides the import log check).                 | `--force`                    |
+| `--from YYYY-MM-DD` | Only import transactions dated on or after the specified date.                                                | `--from 2026-06-01`          |
+| `--to YYYY-MM-DD`   | Only import transactions dated on or before the specified date.                                               | `--to 2026-06-30`            |
+| `--account "NAME"`  | Manually set/override the sheet's account label (Column G). Use with single files.                            | `--account "Chase Checking"` |
+| `--source ADAPTER`  | Force the use of a specific parser adapter (`fakecoin`, `discover`, `chase_checking`, `chase_credit`, `pdf`). | `--source fakecoin`          |
+| `--year YYYY`       | Specify the calendar year for PDF statements (as credit card PDFs often omit the year on transaction lines).  | `--year 2026`                |
 
 ---
 

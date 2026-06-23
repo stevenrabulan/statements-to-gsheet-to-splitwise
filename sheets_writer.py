@@ -25,13 +25,13 @@ def build_row(txn: Transaction) -> list:
         txn.date.strftime("%m/%d/%Y"),
         txn.amount,
         txn.description,
-        "",
+        None,
         True,
-        "",
+        None,
         txn.account,
-        "",
-        "",
-        "",
+        None,
+        None,
+        None,
         _k_note(txn.source_file),
     ]
 
@@ -74,21 +74,33 @@ def read_existing_rows() -> list[list]:
     return resp.get("values", [])
 
 
-def append_transactions(transactions: list[Transaction]) -> int:
+def append_transactions(transactions: list[Transaction], start_search_row: int = 1) -> tuple[int, int, int]:
     creds = _get_credentials()
     service = build("sheets", "v4", credentials=creds)
     sheet_name = get_sheet_name(service, SPREADSHEET_ID, SHEET_GID)
 
     rows = [build_row(t) for t in transactions]
     if not rows:
-        return 0
+        return 0, 0, 0
 
-    service.spreadsheets().values().append(
+    existing_rows = read_existing_rows()
+    target_row_idx = max(len(existing_rows) + 1, start_search_row)
+    
+    start_index = max(1, start_search_row - 1)
+    for i in range(start_index, len(existing_rows)):
+        row = existing_rows[i]
+        a_val = str(row[0]).strip() if len(row) > 0 else ""
+        b_val = str(row[1]).strip() if len(row) > 1 else ""
+        if not a_val and not b_val:
+            target_row_idx = i + 1
+            break
+
+    service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"'{sheet_name}'!A:K",
+        range=f"'{sheet_name}'!A{target_row_idx}",
         valueInputOption="USER_ENTERED",
-        insertDataOption="INSERT_ROWS",
         body={"values": rows},
     ).execute()
 
-    return len(rows)
+    end_row_idx = target_row_idx + len(rows) - 1
+    return len(rows), target_row_idx, end_row_idx

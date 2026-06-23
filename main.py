@@ -126,7 +126,7 @@ def run(args) -> None:
             hi = date_to or date.max
             txns = [t for t in txns if in_window(t.date, lo, hi)]
 
-        new = dedup(txns, existing) if can_dedup else txns
+        new = dedup(txns, existing) if can_dedup and not args.force else txns
         for w in warnings:
             print(f"  WARN {path.name}: {w}")
         print(f"{path.name}: adapter={name} account={account!r} "
@@ -154,10 +154,15 @@ def run(args) -> None:
         print("\n(Dry run — nothing written, import log untouched.)")
         return
 
-    written = append_transactions(to_append)
-    print(f"\nWrote {written} rows to the sheet.")
+    last_end_row = max((entry.get("end_row", 1) for entry in log), default=1)
+    start_search_row = max(1, last_end_row - 200)
+    written, start_row, end_row = append_transactions(to_append, start_search_row)
+    print(f"\nWrote {written} rows to the sheet (rows {start_row}-{end_row}).")
     for entry in pending_log_entries:                        # record only on success
         entry["imported_at"] = datetime.now().isoformat()
+        if written > 0:
+            entry["start_row"] = start_row
+            entry["end_row"] = end_row
         import_log.append_entry(entry, log_path)
 
 
