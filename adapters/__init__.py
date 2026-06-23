@@ -1,9 +1,9 @@
 from models import ImporterError
-from . import fakecoin, chase_pdf
+from . import fakecoin, discover, chase_pdf
 
 # CSV adapters participate in header-sniff routing (in priority order).
-# Later tasks append chase_credit, chase_checking, discover.
-CSV_ADAPTERS = [fakecoin]
+# Later tasks append chase_credit, chase_checking.
+CSV_ADAPTERS = [fakecoin, discover]
 
 # All adapters keyed by NAME for the --source override (includes pdf).
 SOURCE_MAP = {a.NAME: a for a in CSV_ADAPTERS}
