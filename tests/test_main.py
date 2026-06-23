@@ -88,7 +88,8 @@ def test_no_credentials_skips_dedup_but_appends(csv_file, tmp_path):
     with patch("main.read_existing_rows") as rd, \
          patch("main.append_transactions", return_value=0) as wr, \
          patch("main.import_log.LOG_PATH", tmp_path / "log.json"), \
-         patch("main.CREDENTIALS_FILE_EXISTS", False):
+         patch("main.CREDENTIALS_FILE_EXISTS", False), \
+         patch("main.accounts.load_accounts", return_value={"Fakecoin": "Fakecoin Card"}):
         main.run(main.parse_args([str(csv_file)]))
     rd.assert_not_called()          # dedup skipped without credentials
     wr.assert_called_once()         # rows still appended (parse-only)
