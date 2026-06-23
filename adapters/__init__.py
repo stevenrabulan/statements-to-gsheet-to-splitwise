@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from models import ImporterError
 from . import fakecoin, chase_pdf
 
@@ -24,6 +22,3 @@ def detect_adapter(header: list[str]):
     )
 
 
-def account_name(path: str) -> str:
-    """Account label (sheet column G) = the file's stem."""
-    return Path(path).stem

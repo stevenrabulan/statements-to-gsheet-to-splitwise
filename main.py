@@ -12,8 +12,9 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
+import accounts
 import import_log
-from adapters import detect_adapter, account_name, SOURCE_MAP
+from adapters import detect_adapter, SOURCE_MAP
 from models import ImporterError
 from csv_reader import read_csv
 from dedup import dedup, existing_keys_from_rows
@@ -48,8 +49,9 @@ def gather_files(paths: list[str]) -> list[Path]:
         if not p.exists():
             sys.exit(f"ERROR: path not found: {raw}")
         if p.is_dir():
-            files.extend(sorted(p.glob("*.csv")))
-            files.extend(sorted(p.glob("*.pdf")))
+            entries = [c for c in sorted(p.iterdir()) if c.is_file()]
+            files.extend(c for c in entries if c.suffix.lower() == ".csv")
+            files.extend(c for c in entries if c.suffix.lower() == ".pdf")
         else:
             files.append(p)
     return files
@@ -64,9 +66,14 @@ def _parse_date_arg(value: str | None, label: str) -> date | None:
         sys.exit(f"ERROR: --{label} must be YYYY-MM-DD, got {value!r}")
 
 
-def _adapter_and_transactions(path: Path, args):
+def _adapter_and_transactions(path: Path, args, mapping):
     """Route a single file and return (adapter_name, account, transactions, skipped, warnings)."""
-    account = args.account or account_name(str(path))
+    account = args.account or accounts.account_for_filename(path.name, mapping)
+    if not account:
+        raise ImporterError(
+            f"{path.name}: no --account given and no accounts.json key matches its name. "
+            f"Add an entry to accounts.json (see accounts.example.json)."
+        )
     if args.source:
         adapter = SOURCE_MAP[args.source]
     elif path.suffix.lower() == ".pdf":
@@ -90,6 +97,7 @@ def _adapter_and_transactions(path: Path, args):
 
 def run(args) -> None:
     files = gather_files(args.paths)
+    mapping = accounts.load_accounts(accounts.ACCOUNTS_PATH)
     date_from = _parse_date_arg(args.date_from, "from")
     date_to = _parse_date_arg(args.date_to, "to")
 
@@ -110,7 +118,7 @@ def run(args) -> None:
             continue
 
         try:
-            name, account, txns, skipped, warnings = _adapter_and_transactions(path, args)
+            name, account, txns, skipped, warnings = _adapter_and_transactions(path, args, mapping)
         except ImporterError as exc:
             sys.exit(f"ERROR in {path.name}: {exc}")
         if date_from or date_to:

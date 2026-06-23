@@ -1,5 +1,6 @@
 credentials.json
 token.json
+accounts.json
 *.pdf
 __pycache__/
 *.pyc

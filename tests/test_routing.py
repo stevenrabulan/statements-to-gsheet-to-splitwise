@@ -1,7 +1,7 @@
 import pytest
 
 from models import ImporterError
-from adapters import detect_adapter, account_name, SOURCE_MAP
+from adapters import detect_adapter, SOURCE_MAP
 
 
 FAKECOIN_HEADER = ["Date", "Amount", "Currency", "Type", "Status", "Merchant",
@@ -20,10 +20,6 @@ def test_unrecognized_header_raises_with_listing():
     assert "fakecoin" in msg          # lists supported accounts
     assert "foo" in msg               # echoes the unrecognized header
 
-
-def test_account_name_is_filename_stem():
-    assert account_name("statements/2026-06/Chase Sapphire Reserve.csv") == "Chase Sapphire Reserve"
-    assert account_name("Chase Checking.csv") == "Chase Checking"
 
 
 def test_source_map_has_pdf_and_fakecoin():

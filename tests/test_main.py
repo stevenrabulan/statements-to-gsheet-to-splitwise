@@ -20,11 +20,14 @@ def csv_file(tmp_path):
     return f
 
 
-def _run(args, existing_rows=None, log_path=None):
+def _run(args, existing_rows=None, log_path=None, accounts_map=None):
+    if accounts_map is None:
+        accounts_map = {"Fakecoin": "Fakecoin Card"}
     with patch("main.read_existing_rows", return_value=existing_rows if existing_rows is not None else []) as rd, \
          patch("main.append_transactions", return_value=0) as wr, \
          patch("main.import_log.LOG_PATH", log_path), \
-         patch("main.CREDENTIALS_FILE_EXISTS", True):
+         patch("main.CREDENTIALS_FILE_EXISTS", True), \
+         patch("main.accounts.load_accounts", return_value=accounts_map):
         main.run(main.parse_args(args))
     return rd, wr
 
@@ -95,5 +98,13 @@ def test_unmatched_csv_exits_with_filename(tmp_path):
     bad = tmp_path / "Mystery.csv"
     bad.write_text("Foo,Bar\n1,2\n")
     with pytest.raises(SystemExit) as exc:
-        _run([str(bad)], log_path=tmp_path / "log.json")
+        _run([str(bad)], log_path=tmp_path / "log.json", accounts_map={"Mystery": "Mystery Acct"})
     assert "Mystery.csv" in str(exc.value)
+
+
+def test_no_account_match_exits(tmp_path):
+    f = tmp_path / "Unknown1234.csv"
+    f.write_text(FAKECOIN)
+    with pytest.raises(SystemExit) as exc:
+        _run([str(f)], log_path=tmp_path / "log.json", accounts_map={"Fakecoin": "Fakecoin Card"})
+    assert "Unknown1234.csv" in str(exc.value)
