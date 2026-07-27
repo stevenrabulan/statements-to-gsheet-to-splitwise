@@ -9,13 +9,14 @@ Usage:
 """
 import argparse
 import sys
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
 import accounts
 import import_log
 from adapters import detect_adapter, SOURCE_MAP
-from models import ImporterError
+from models import AccountConfig, ImporterError
 from csv_reader import read_csv
 from dedup import dedup, existing_keys_from_rows
 from date_filter import in_window
@@ -66,14 +67,25 @@ def _parse_date_arg(value: str | None, label: str) -> date | None:
         sys.exit(f"ERROR: --{label} must be YYYY-MM-DD, got {value!r}")
 
 
-def _adapter_and_transactions(path: Path, args, mapping):
-    """Route a single file and return (adapter_name, account, transactions, skipped, warnings)."""
-    account = args.account or accounts.account_for_filename(path.name, mapping)
-    if not account:
+def _account_config(path: Path, args, mapping) -> AccountConfig:
+    """Resolve the account config for a file. --account overrides only the label,
+    so a matched account keeps its ignore_before cutoff."""
+    config = accounts.account_for_filename(path.name, mapping)
+    if args.account:
+        cutoff = config.ignore_before if config else None
+        return AccountConfig(name=args.account, ignore_before=cutoff)
+    if not config:
         raise ImporterError(
             f"{path.name}: no --account given and no accounts.json key matches its name. "
             f"Add an entry to accounts.json (see accounts.example.json)."
         )
+    return config
+
+
+def _adapter_and_transactions(path: Path, args, mapping):
+    """Route a single file and return (adapter_name, account, transactions, skipped, warnings)."""
+    config = _account_config(path, args, mapping)
+    account = config.name
     if args.source:
         adapter = SOURCE_MAP[args.source]
     elif path.suffix.lower() == ".pdf":
@@ -84,11 +96,19 @@ def _adapter_and_transactions(path: Path, args, mapping):
 
     if adapter.NAME == "pdf":
         txns = adapter.parse_pdf(path, card_name=account, year=args.year)
-        skipped, warnings = {}, []
+        skipped, warnings = Counter(), []
     else:
         header, rows = read_csv(path)
         result = adapter.parse(rows, account=account)
         txns, skipped, warnings = result.transactions, result.skipped, result.warnings
+
+    # Accounts that export full history (e.g. FakeMart) carry a cutoff in accounts.json.
+    if config.ignore_before is not None:
+        kept = [t for t in txns if t.date >= config.ignore_before]
+        dropped = len(txns) - len(kept)
+        if dropped:
+            skipped[f"before {config.ignore_before.isoformat()}"] += dropped
+        txns = kept
 
     for t in txns:
         t.source_file = f"{path.parent.name}/{path.name}"
@@ -104,8 +124,13 @@ def run(args) -> None:
     log_path = import_log.LOG_PATH
     log = import_log.load_log(log_path)
     can_dedup = CREDENTIALS_FILE_EXISTS
-    existing = existing_keys_from_rows(read_existing_rows()) if can_dedup else None
-    if not can_dedup:
+    if can_dedup:
+        try:
+            existing = existing_keys_from_rows(read_existing_rows())
+        except ImporterError as exc:
+            sys.exit(f"ERROR: {exc}")
+    else:
+        existing = None
         print("WARNING: credentials.json absent — dedup skipped (parse-only preview).")
 
     to_append = []

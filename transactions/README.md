@@ -55,6 +55,27 @@ Then edit `accounts.json`. For example:
 ```
 *Note: Longest matching key wins. In the example above, a filename containing `Chase1111` will map to `"Chase Sapphire Reserve"`.*
 
+#### Per-account settings (optional)
+
+Some cards (FakeMart, for example) export your **entire** transaction history on every download, not just the current statement period. To ignore everything before the date you started tracking that card, replace the plain string with an object:
+
+```json
+{
+  "Chase1111": "Chase Sapphire Reserve",
+  "FakeMart": {
+    "name": "FakeMart Card",
+    "ignore_before": "2026-06-01"
+  }
+}
+```
+
+| Setting         | Required | Description                                                                                     |
+| :---------------| :--------| :------------------------------------------------------------------------------------------------|
+| `name`          | Yes      | The account label written to Column G — identical to the plain-string form.                     |
+| `ignore_before` | No       | `YYYY-MM-DD`. Transactions dated **before** this day are dropped. The cutoff day itself is kept. |
+
+Dropped rows are reported in the per-file summary (e.g. `skipped={'before 2026-06-01': 25}`), so you can always see how many were filtered. The cutoff is applied before deduplication, and `--account` overrides the label only — it does not disable a matched account's cutoff.
+
 ### 3. Add Google Cloud Credentials
 1. Go to the [Google Cloud Console](https://console.cloud.google.com) and create a project.
 2. Enable the **Google Sheets API**.
@@ -98,7 +119,7 @@ You can also pass individual files instead of entire directories:
 | `--from YYYY-MM-DD` | Only import transactions dated on or after the specified date.                                                | `--from 2026-06-01`          |
 | `--to YYYY-MM-DD`   | Only import transactions dated on or before the specified date.                                               | `--to 2026-06-30`            |
 | `--account "NAME"`  | Manually set/override the sheet's account label (Column G). Use with single files.                            | `--account "Chase Checking"` |
-| `--source ADAPTER`  | Force the use of a specific parser adapter (`fakecoin`, `discover`, `chase_checking`, `chase_credit`, `pdf`). | `--source fakecoin`          |
+| `--source ADAPTER`  | Force the use of a specific parser adapter (`fakecoin`, `discover`, `chase_checking`, `chase_credit`, `fakemart_credit`, `pdf`). | `--source fakecoin`          |
 | `--year YYYY`       | Specify the calendar year for PDF statements (as credit card PDFs often omit the year on transaction lines).  | `--year 2026`                |
 
 ---

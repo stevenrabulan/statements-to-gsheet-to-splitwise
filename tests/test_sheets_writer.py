@@ -17,11 +17,11 @@ def test_build_row_fields():
     assert row[0] == "05/20/2026"
     assert row[1] == 45.67
     assert row[2] == "WHOLE FOODS MARKET"
-    assert row[3] == ""
+    assert row[3] is None
     assert row[4] is True
-    assert row[5] == ""
+    assert row[5] is None
     assert row[6] == "Chase Sapphire Reserve"
-    assert row[7] == "" and row[8] == "" and row[9] == ""
+    assert row[7] is None and row[8] is None and row[9] is None
     assert row[10] == "split-transactions automation Chase Sapphire Reserve.csv"
     assert len(row) == 11
 
@@ -49,6 +49,11 @@ def test_read_existing_rows_returns_values(mock_name, mock_creds, mock_build):
     rows = read_existing_rows()
     assert rows == [["06/01/2026", "5.00"]]
 
+    # Dedup depends on raw serials/floats, not the sheet's display format.
+    kwargs = (service.spreadsheets.return_value.values.return_value
+              .get.call_args.kwargs)
+    assert kwargs["valueRenderOption"] == "UNFORMATTED_VALUE"
+
 
 @patch("sheets_writer.build")
 @patch("sheets_writer._get_credentials")
@@ -61,3 +66,31 @@ def test_read_existing_rows_empty_sheet(mock_name, mock_creds, mock_build):
 
     from sheets_writer import read_existing_rows
     assert read_existing_rows() == []
+
+
+@patch("sheets_writer.TOKEN_FILE")
+@patch("sheets_writer.Credentials")
+@patch("sheets_writer.InstalledAppFlow")
+def test_get_credentials_handles_refresh_error(mock_flow_cls, mock_creds_cls, mock_token_file):
+    from google.auth.exceptions import RefreshError
+    mock_token_file.exists.return_value = True
+
+    expired_creds = MagicMock()
+    expired_creds.valid = False
+    expired_creds.expired = True
+    expired_creds.refresh_token = "some_refresh_token"
+    expired_creds.refresh.side_effect = RefreshError("invalid_grant")
+
+    mock_creds_cls.from_authorized_user_file.return_value = expired_creds
+
+    new_creds = MagicMock()
+    new_creds.to_json.return_value = '{"token": "new"}'
+    flow_instance = MagicMock()
+    flow_instance.run_local_server.return_value = new_creds
+    mock_flow_cls.from_client_secrets_file.return_value = flow_instance
+
+    from sheets_writer import _get_credentials
+    res = _get_credentials()
+    assert res == new_creds
+    flow_instance.run_local_server.assert_called_once()
+

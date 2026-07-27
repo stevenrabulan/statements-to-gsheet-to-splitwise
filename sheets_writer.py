@@ -1,6 +1,7 @@
 from datetime import date
 from pathlib import Path
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -42,8 +43,11 @@ def _get_credentials() -> Credentials:
         creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                creds = None
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_FILE), SCOPES
             )
@@ -61,14 +65,24 @@ def get_sheet_name(service, spreadsheet_id: str, gid: int) -> str:
 
 
 def read_existing_rows() -> list[list]:
-    """Read the tab's A:K for dedup. Returns raw cell values (no parsing)."""
+    """Read the tab's A:K for dedup. Returns raw cell values (no parsing).
+
+    UNFORMATTED_VALUE is required: dates come back as serial numbers and amounts
+    as floats, so dedup does not depend on the sheet's display format. With the
+    default FORMATTED_VALUE a date column formatted as YYYY/MM/DD returns
+    "2026/04/11", which no longer matches how build_row() wrote it.
+    """
     creds = _get_credentials()
     service = build("sheets", "v4", credentials=creds)
     sheet_name = get_sheet_name(service, SPREADSHEET_ID, SHEET_GID)
     resp = (
         service.spreadsheets()
         .values()
-        .get(spreadsheetId=SPREADSHEET_ID, range=f"'{sheet_name}'!A:K")
+        .get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"'{sheet_name}'!A:K",
+            valueRenderOption="UNFORMATTED_VALUE",
+        )
         .execute()
     )
     return resp.get("values", [])

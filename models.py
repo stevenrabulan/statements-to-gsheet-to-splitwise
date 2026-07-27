@@ -16,6 +16,12 @@ class Transaction:
     source_file: str = ""    # import file basename — used for the column-K note
 
 
+@dataclass(frozen=True)
+class AccountConfig:
+    name: str                        # column G label (card or bank account name)
+    ignore_before: date | None = None  # drop transactions dated before this day
+
+
 @dataclass
 class ParseResult:
     transactions: list[Transaction] = field(default_factory=list)
