@@ -69,9 +69,9 @@ Some cards (FakeMart, for example) export your **entire** transaction history on
 }
 ```
 
-| Setting         | Required | Description                                                                                     |
-| :---------------| :--------| :------------------------------------------------------------------------------------------------|
-| `name`          | Yes      | The account label written to Column G — identical to the plain-string form.                     |
+| Setting         | Required | Description                                                                                      |
+| :----------------| :---------| :-------------------------------------------------------------------------------------------------|
+| `name`          | Yes      | The account label written to Column G — identical to the plain-string form.                      |
 | `ignore_before` | No       | `YYYY-MM-DD`. Transactions dated **before** this day are dropped. The cutoff day itself is kept. |
 
 Dropped rows are reported in the per-file summary (e.g. `skipped={'before 2026-06-01': 25}`), so you can always see how many were filtered. The cutoff is applied before deduplication, and `--account` overrides the label only — it does not disable a matched account's cutoff.
