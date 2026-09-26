@@ -18,8 +18,8 @@ def _parse():
 
 def test_keeps_purchases_positive():
     result = _parse()
-    assert len(result.transactions) == 2
-    assert all(t.amount > 0 for t in result.transactions)
+    purchases = [t for t in result.transactions if t.amount > 0]
+    assert len(purchases) == 2
     t = result.transactions[0]
     assert t.date == date(2026, 4, 15)
     assert t.description == "FAKE DINER"
@@ -27,12 +27,12 @@ def test_keeps_purchases_positive():
     assert t.account == "Discover Card"
 
 
-def test_payments_and_negative_amounts_dropped():
+def test_payments_dropped_refunds_kept_negative():
     result = _parse()
-    assert result.skipped["credit/refund"] == 2
-    descriptions = [t.description for t in result.transactions]
-    assert "PAYMENT THANK YOU" not in descriptions
-    assert "FAKE STORE REFUND" not in descriptions
+    assert result.skipped["payment/deposit"] == 1
+    by_desc = {t.description: t for t in result.transactions}
+    assert "PAYMENT THANK YOU" not in by_desc
+    assert by_desc["FAKE STORE REFUND"].amount == -12.00
 
 
 def test_routes_by_header():

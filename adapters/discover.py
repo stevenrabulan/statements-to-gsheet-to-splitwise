@@ -27,8 +27,10 @@ def parse(rows: list[dict], account: str) -> ParseResult:
     _require(rows)
     result = ParseResult()
     for i, row in enumerate(rows, start=2):
-        if (row.get("Category") or "").strip() == "Payments and Credits":
-            result.skipped["credit/refund"] += 1
+        description = (row.get("Description") or "").strip()
+        if (row.get("Category") or "").strip() == "Payments and Credits" \
+                and "PAYMENT" in description.upper():
+            result.skipped["payment/deposit"] += 1
             continue
         raw_date = (row.get("Trans. Date") or "").strip()
         raw_amount = (row.get("Amount") or "").strip()
@@ -40,10 +42,10 @@ def parse(rows: list[dict], account: str) -> ParseResult:
             amount = float(raw_amount.replace(",", "").replace("$", ""))
         except ValueError:
             raise ImporterError(f"discover row {i}: bad amount {raw_amount!r}")
-        if amount <= 0:                          # refund/credit not flagged by category
-            result.skipped["credit/refund"] += 1
+        if amount == 0:
+            result.skipped["zero amount"] += 1
             continue
         result.transactions.append(Transaction(
-            date=txn_date, description=(row.get("Description") or "").strip(),
+            date=txn_date, description=description,
             amount=amount, account=account))
     return result

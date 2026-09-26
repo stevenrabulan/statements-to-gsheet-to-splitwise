@@ -11,7 +11,7 @@ class ImporterError(Exception):
 class Transaction:
     date: date
     description: str
-    amount: float            # positive spend, rounded to cents at write
+    amount: float            # positive spend, negative refund; rounded to cents at write
     account: str             # column G label (card or bank account name)
     source_file: str = ""    # import file basename — used for the column-K note
 
