@@ -186,3 +186,43 @@ def test_ignore_before_applies_before_date_range_log_entry(fakemart_file, tmp_pa
     entry = json.loads(log_path.read_text())[0]
     assert entry["date_range"] == ["2026-06-22", "2026-06-22"]
     assert entry["rows_skipped"] == 1
+
+
+CHASE_HEADER = "Transaction Date,Post Date,Description,Category,Type,Amount,Memo\n"
+
+
+def _chase_file(tmp_path, lines):
+    f = tmp_path / "Chase Amazon.csv"
+    f.write_text(CHASE_HEADER + "".join(f"{line}\n" for line in lines))
+    return f
+
+
+def _run_chase(chase_file, tmp_path):
+    return _run([str(chase_file)], log_path=tmp_path / "log.json",
+                accounts_map={"Chase Amazon": AccountConfig("Amazon Card")})
+
+
+def test_amazon_order_charges_dropped_from_card_import(tmp_path, capsys):
+    chase = _chase_file(tmp_path, [
+        "09/01/2026,09/02/2026,Amazon.com*AB12C3DE4,Shopping,Sale,-23.10,",
+        "09/02/2026,09/03/2026,AMAZON MKTPL*Y25EQ0CT3,Shopping,Sale,-11.93,",
+        "09/03/2026,09/04/2026,amzn mktp us*ZZ9YY8XX7,Shopping,Sale,-38.28,",
+        "09/04/2026,09/05/2026,AMAZON MKTPL*Q11RR22SS,Shopping,Return,5.00,",
+        "09/05/2026,09/06/2026,WHOLEFDS AUS 10250,Groceries,Sale,-42.17,",
+    ])
+    rd, wr = _run_chase(chase, tmp_path)
+    appended = wr.call_args[0][0]
+    assert [t.description for t in appended] == ["WHOLEFDS AUS 10250"]
+    assert "'amazon order charge': 4" in capsys.readouterr().out
+
+
+def test_non_order_amazon_charges_still_import(tmp_path):
+    kept = ["Amazon Prime*AB1CD2EF3", "Prime Video *GH4IJ5KL6",
+            "Kindle Svcs*MN7OP8QR9", "Audible*ST1UV2WX3", "WHOLEFDS AUS 10250"]
+    chase = _chase_file(tmp_path, [
+        f"09/0{i + 1}/2026,09/0{i + 2}/2026,{desc},Shopping,Sale,-9.99,"
+        for i, desc in enumerate(kept)
+    ])
+    rd, wr = _run_chase(chase, tmp_path)
+    appended = wr.call_args[0][0]
+    assert sorted(t.description for t in appended) == sorted(kept)

@@ -28,6 +28,11 @@ from sheets_writer import (
 
 CREDENTIALS_FILE_EXISTS = CREDENTIALS_FILE.exists()
 
+# Amazon physical-order Charges come in as Items from Order data (ADR 0001), so
+# card imports drop them. Prime, Prime Video, Kindle, Audible, and Whole Foods
+# use other descriptors and still import.
+AMAZON_ORDER_PREFIXES = ("amazon.com*", "amazon mktpl*", "amzn mktp")
+
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Import spending CSV/PDF exports into the Splitwise sheet.")
@@ -101,6 +106,11 @@ def _adapter_and_transactions(path: Path, args, mapping):
         header, rows = read_csv(path)
         result = adapter.parse(rows, account=account)
         txns, skipped, warnings = result.transactions, result.skipped, result.warnings
+
+    kept = [t for t in txns if not t.description.lower().startswith(AMAZON_ORDER_PREFIXES)]
+    if len(kept) < len(txns):
+        skipped["amazon order charge"] += len(txns) - len(kept)
+    txns = kept
 
     # Accounts that export full history (e.g. FakeMart) carry a cutoff in accounts.json.
     if config.ignore_before is not None:
