@@ -89,6 +89,48 @@ Amazon spending is recorded as **one sheet row per Item**, with its Loaded Cost 
 - **Per Item:** position within the Order, full title, short name, quantity, unit price, cancelled flag, the Promos that target it (name and amount), and its own tax if Amazon shows it.
 - **Per Refund:** which Item (order number and position), amount, and refund date.
 - The file carries a schema version so that later prompt changes can be detected.
+- **Promos are recorded per Order, not per Item** (decided in ticket 02). Each Promo lists the positions of the Items it targets, so a Promo on several Items carries one total that the importer spreads. Recording a copy on each Item would repeat or split that total.
+
+**Schema version 1** (fixture: `tests/fixtures/amazon-orders-sample.json`). All amounts are positive dollar numbers as Amazon shows them. Promos and discounts are amounts taken off.
+
+```json
+{
+  "schema_version": 1,
+  "scraped_on": "2026-09-28",
+  "orders": [{
+    "order_number": "111-0000000-0000001",
+    "order_date": "2026-08-03",
+    "status": "Delivered",
+    "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"},
+                {"type": "gift_card"}],
+    "order_total": 30.95,
+    "shipping": 5.99,
+    "discounts": [{"name": "Subscribe & Save", "amount": 1.50}],
+    "promos": [{"name": "Save $3 with coupon", "amount": 3.00, "positions": [1, 2]}],
+    "shipments": [{
+      "shipped": true,
+      "ship_date": "2026-08-04",
+      "tax": 1.81,
+      "shipping": null,
+      "items": [{
+        "position": 1,
+        "title": "Fakebrand ForceFlex Tall Kitchen Drawstring Trash Bags, 13 Gallon, 80 Count",
+        "short_name": "Fakebrand ForceFlex Trash Bags",
+        "quantity": 2,
+        "unit_price": 12.99,
+        "cancelled": false,
+        "tax": null
+      }]
+    }]
+  }],
+  "refunds": [{"order_number": "111-0000000-0000001", "position": 1,
+               "amount": 12.99, "refund_date": "2026-08-20"}]
+}
+```
+
+- `payment[].type` is `card`, `gift_card`, or `points`. Only `card` has `card_type` and `last_four` (4 digits).
+- `shipping` on the Order is required (0 when free). `shipping` on a shipment is `null` unless Amazon shows shipping per shipment.
+- An Item's `tax` is `null` unless Amazon shows per-Item tax.
 
 **Amazon adapter (new)**
 - Recognized by file type (JSON) and routed like the other adapters. The CLI's folder expansion includes `.json` files.

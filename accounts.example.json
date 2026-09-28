@@ -7,5 +7,9 @@
   "FakeMart": {
     "name": "FakeMart Card",
     "ignore_before": "2026-06-01"
+  },
+  "amazon-orders": {
+    "name": "Amazon",
+    "ignore_before": "2026-07-29"
   }
 }

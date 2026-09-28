@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Multi-account CSV (+ PDF fallback) importer for the Splitwise sheet.
+"""Multi-account CSV (+ PDF fallback, + scraped Amazon Orders) importer for the Splitwise sheet.
 
 Usage:
     python main.py transactions/2026-06/                     # whole month
     python main.py "Fakecoin Card.csv"
     python main.py statement.pdf --source pdf --account "Chase Sapphire" --year 2026
     python main.py *.csv --dry-run
+    python main.py amazon-orders-2026-09-28.json --dry-run
 """
 import argparse
 import sys
@@ -43,7 +44,7 @@ def parse_args(argv=None):
 
 
 def gather_files(paths: list[str]) -> list[Path]:
-    """Expand directories to *.csv + *.pdf; validate every path exists."""
+    """Expand directories to *.csv + *.pdf + *.json; validate every path exists."""
     files: list[Path] = []
     for raw in paths:
         p = Path(raw)
@@ -53,6 +54,7 @@ def gather_files(paths: list[str]) -> list[Path]:
             entries = [c for c in sorted(p.iterdir()) if c.is_file()]
             files.extend(c for c in entries if c.suffix.lower() == ".csv")
             files.extend(c for c in entries if c.suffix.lower() == ".pdf")
+            files.extend(c for c in entries if c.suffix.lower() == ".json")
         else:
             files.append(p)
     return files
@@ -90,6 +92,8 @@ def _adapter_and_transactions(path: Path, args, mapping):
         adapter = SOURCE_MAP[args.source]
     elif path.suffix.lower() == ".pdf":
         adapter = SOURCE_MAP["pdf"]
+    elif path.suffix.lower() == ".json":
+        adapter = SOURCE_MAP["amazon"]
     else:
         header, _rows = read_csv(path)
         adapter = detect_adapter(header)
@@ -97,6 +101,9 @@ def _adapter_and_transactions(path: Path, args, mapping):
     if adapter.NAME == "pdf":
         txns = adapter.parse_pdf(path, card_name=account, year=args.year)
         skipped, warnings = Counter(), []
+    elif adapter.NAME == "amazon":
+        result = adapter.parse_orders(path, config=config, accounts=mapping)
+        txns, skipped, warnings = result.transactions, result.skipped, result.warnings
     else:
         header, rows = read_csv(path)
         result = adapter.parse(rows, account=account)
@@ -173,7 +180,8 @@ def run(args) -> None:
     to_append.sort(key=lambda t: t.date)
     print(f"\n{'DRY RUN — ' if args.dry_run else ''}{len(to_append)} row(s) to append:")
     for t in to_append:
-        print(f"  {t.date}  {t.description:<40}  ${t.amount:.2f}  [{t.account}]")
+        formula = f"  {t.amount_formula}" if t.amount_formula else ""
+        print(f"  {t.date}  {t.description:<40}  ${t.amount:.2f}{formula}  [{t.account}]")
 
     if args.dry_run:
         print("\n(Dry run — nothing written, import log untouched.)")

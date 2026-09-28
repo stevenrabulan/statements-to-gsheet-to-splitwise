@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import date, datetime, timedelta
 
+from adapters.amazon import KEY_PATTERN as AMAZON_KEY_PATTERN
 from models import ImporterError, Transaction
 
 # Google Sheets stores dates as days since this epoch (shared with Excel).
@@ -48,6 +49,10 @@ def _coerce_amount(value) -> float:
     return float(text)
 
 
+def _amazon_key(key: str) -> tuple:
+    return ("amazon", key)
+
+
 def _key(txn_date, amount, description, account):
     return (
         txn_date,
@@ -58,7 +63,8 @@ def _key(txn_date, amount, description, account):
 
 
 def existing_keys_from_rows(rows: list[list]) -> Counter:
-    """Build a multiset of keys from raw sheet rows (cols A,B,C,G).
+    """Build a multiset of keys from raw sheet rows (cols A,B,C,G, plus any
+    Amazon key in col K).
 
     Rows that don't parse (headers, blanks, formula rows) are ignored. Raises if
     a sheet full of candidate rows yields nothing — a silent zero here would let
@@ -70,6 +76,9 @@ def existing_keys_from_rows(rows: list[list]) -> Counter:
         if not row or str(row[0]).strip() == "":
             continue
         candidates += 1
+        if len(row) > 10:
+            for key in AMAZON_KEY_PATTERN.findall(str(row[10])):
+                counter[_amazon_key(key)] += 1
         try:
             d = _coerce_date(row[0])
             amt = _coerce_amount(row[1])
@@ -94,11 +103,14 @@ def dedup(incoming: list[Transaction], existing: Counter) -> list[Transaction]:
 
     Consumes one count per match so genuine repeat charges are preserved.
     Does NOT count its own output — re-importing the same export adds nothing.
+    Amazon rows match on their stable key alone, so a re-scrape whose amount
+    moved by a cent is still recognized.
     """
     remaining = Counter(existing)
     kept = []
     for txn in incoming:
-        k = _key(txn.date, txn.amount, txn.description, txn.account)
+        k = (_amazon_key(txn.key) if txn.key
+             else _key(txn.date, txn.amount, txn.description, txn.account))
         if remaining[k] > 0:
             remaining[k] -= 1
         else:

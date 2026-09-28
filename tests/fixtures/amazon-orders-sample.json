@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "scraped_on": "2026-09-28",
+  "orders": [
+    {
+      "order_number": "111-0000000-0000001",
+      "order_date": "2026-08-03",
+      "status": "Delivered",
+      "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+      "order_total": 14.07,
+      "shipping": 0,
+      "discounts": [],
+      "promos": [],
+      "shipments": [
+        {
+          "shipped": true,
+          "ship_date": "2026-08-04",
+          "tax": 1.08,
+          "shipping": null,
+          "items": [
+            {
+              "position": 1,
+              "title": "Fakebrand ForceFlex Tall Kitchen Drawstring Trash Bags, 13 Gallon, 80 Count",
+              "short_name": "Fakebrand ForceFlex Trash Bags",
+              "quantity": 1,
+              "unit_price": 12.99,
+              "cancelled": false,
+              "tax": 1.08
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "refunds": []
+}

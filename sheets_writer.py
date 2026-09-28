@@ -16,24 +16,27 @@ CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
 TOKEN_FILE = Path(__file__).parent / "token.json"
 
 
-def _k_note(source_file: str) -> str:
-    sf = (source_file or "").strip()
-    return f"split-transactions automation {sf}" if sf else "split-transactions automation"
+def _k_note(detail: str) -> str:
+    """Column K: the automation marker plus the Amazon key or the source file."""
+    detail = (detail or "").strip()
+    return f"split-transactions automation {detail}" if detail else "split-transactions automation"
 
 
 def build_row(txn: Transaction) -> list:
+    # Amazon Item rows carry a formula, a stable key, and (for Refunds) an explicit
+    # classification. Card rows leave all three unset and keep today's shape.
     return [
         txn.date.strftime("%m/%d/%Y"),
-        txn.amount,
+        txn.amount_formula or txn.amount,
         txn.description,
         None,
-        True,
+        True if txn.send_to_splitwise is None else txn.send_to_splitwise,
         None,
         txn.account,
+        txn.for_who,
         None,
         None,
-        None,
-        _k_note(txn.source_file),
+        _k_note(txn.key or txn.source_file),
     ]
 
 

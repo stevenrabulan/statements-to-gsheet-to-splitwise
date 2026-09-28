@@ -14,6 +14,11 @@ class Transaction:
     amount: float            # positive spend, negative refund; rounded to cents at write
     account: str             # column G label (card or bank account name)
     source_file: str = ""    # import file basename — used for the column-K note
+    # Amazon Item rows only; card rows leave these unset.
+    amount_formula: str | None = None      # column B formula, e.g. "=2*12.99+1.81"
+    key: str | None = None                 # stable dedup key, written to column K
+    send_to_splitwise: bool | None = None  # column E; None = the default (ticked)
+    for_who: str | None = None             # column H; None = left for the sheet to fill
 
 
 @dataclass(frozen=True)

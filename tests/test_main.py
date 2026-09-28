@@ -1,10 +1,13 @@
+import shutil
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 import main
 from models import AccountConfig, Transaction, ParseResult
+from sheets_writer import build_row
 
 FAKECOIN = (
     "Date,Amount,Currency,Type,Status,Merchant,Card Last Four,"
@@ -186,3 +189,88 @@ def test_ignore_before_applies_before_date_range_log_entry(fakemart_file, tmp_pa
     entry = json.loads(log_path.read_text())[0]
     assert entry["date_range"] == ["2026-06-22", "2026-06-22"]
     assert entry["rows_skipped"] == 1
+
+
+AMAZON_FIXTURE = Path(__file__).parent / "fixtures" / "amazon-orders-sample.json"
+AMAZON_ACCOUNTS = {
+    "Fakecoin": AccountConfig("Fakecoin Card"),
+    "Chase4242": AccountConfig("Amazon Card"),
+    "amazon-orders": AccountConfig("Amazon", date(2026, 7, 29)),
+}
+AMAZON_NOTE = "split-transactions automation amazon 111-0000000-0000001 #1"
+
+
+@pytest.fixture
+def amazon_month(tmp_path):
+    """A month folder holding a card CSV and a scraped Amazon Order file."""
+    month = tmp_path / "2026-09"
+    month.mkdir()
+    (month / "Fakecoin Card.csv").write_text(FAKECOIN)
+    shutil.copy(AMAZON_FIXTURE, month / "amazon-orders-2026-09-28.json")
+    return month
+
+
+def _sheet_rows(wr):
+    return [build_row(t) for t in wr.call_args[0][0]]
+
+
+def test_folder_with_amazon_file_writes_item_row(amazon_month, tmp_path):
+    rd, wr = _run([str(amazon_month)], log_path=tmp_path / "log.json",
+                  accounts_map=AMAZON_ACCOUNTS)
+    rows = {row[2]: row for row in _sheet_rows(wr)}
+    assert set(rows) == {"WHOLE FOODS", "Fakebrand ForceFlex Trash Bags"}
+    item = rows["Fakebrand ForceFlex Trash Bags"]
+    assert item[0] == "08/03/2026"
+    assert item[1] == "=12.99+1.08"
+    assert item[4] is True                  # Shared by default, like card rows
+    assert item[6] == "Amazon Card"
+    assert item[7] is None                  # For who left for the sheet to fill
+    assert item[10] == AMAZON_NOTE
+    # Card rows are unchanged.
+    assert rows["WHOLE FOODS"][1] == 12.50
+    assert rows["WHOLE FOODS"][10] == "split-transactions automation 2026-09/Fakecoin Card.csv"
+
+
+def test_rescrape_of_imported_item_writes_nothing_even_if_amount_moved(amazon_month, tmp_path):
+    existing = [
+        ["06/01/2026", 12.50, "WHOLE FOODS", "", True, "", "Fakecoin Card", "", "", "", ""],
+        # Same Order, already in the sheet, a cent off and renamed by hand.
+        [46237, 14.08, "Trash bags", "", False, "Partner", "Amazon Card", "", "", "",
+         AMAZON_NOTE],
+    ]
+    rd, wr = _run([str(amazon_month)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+
+
+def test_amazon_key_match_is_exact_not_a_prefix(amazon_month, tmp_path):
+    # Item #10's key contains "#1" as a prefix; it must not hide Item #1.
+    existing = [[46237, 5.00, "Other", "", True, "", "Amazon Card", "", "", "",
+                 "split-transactions automation amazon 111-0000000-0000001 #10"]]
+    rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert [row[10] for row in _sheet_rows(wr)] == [AMAZON_NOTE]
+
+
+def test_amazon_dry_run_writes_nothing(amazon_month, tmp_path):
+    log_path = tmp_path / "log.json"
+    rd, wr = _run([str(amazon_month), "--dry-run"], log_path=log_path,
+                  accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert not log_path.exists()
+
+
+def test_amazon_file_is_logged_and_skipped_next_time(amazon_month, tmp_path):
+    log_path = tmp_path / "log.json"
+    amazon_file = str(amazon_month / "amazon-orders-2026-09-28.json")
+    _run([amazon_file], log_path=log_path, accounts_map=AMAZON_ACCOUNTS)
+    rd, wr = _run([amazon_file], log_path=log_path, accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    rd, wr = _run([amazon_file, "--force"], log_path=log_path, accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_called_once()
+
+
+def test_date_range_filters_amazon_rows_by_order_date(amazon_month, tmp_path):
+    rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json"), "--from", "2026-08-04"],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
