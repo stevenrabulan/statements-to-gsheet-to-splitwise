@@ -30,8 +30,22 @@ CREDENTIALS_FILE_EXISTS = CREDENTIALS_FILE.exists()
 
 # Amazon physical-order Charges come in as Items from Order data (ADR 0001), so
 # card imports drop them. Prime, Prime Video, Kindle, Audible, and Whole Foods
-# use other descriptors and still import.
+# use other descriptors and still import. "amzn mktp" has no "*" because real
+# descriptors read "AMZN Mktp US*...".
 AMAZON_ORDER_PREFIXES = ("amazon.com*", "amazon mktpl*", "amzn mktp")
+
+
+def _is_amazon_order_charge(t) -> bool:
+    return t.description.lower().startswith(AMAZON_ORDER_PREFIXES)
+
+
+def _drop(txns, skipped: Counter, should_drop, reason: str):
+    """Remove transactions matching should_drop, counting them under reason."""
+    kept = [t for t in txns if not should_drop(t)]
+    dropped = len(txns) - len(kept)
+    if dropped:
+        skipped[reason] += dropped
+    return kept
 
 
 def parse_args(argv=None):
@@ -107,18 +121,12 @@ def _adapter_and_transactions(path: Path, args, mapping):
         result = adapter.parse(rows, account=account)
         txns, skipped, warnings = result.transactions, result.skipped, result.warnings
 
-    kept = [t for t in txns if not t.description.lower().startswith(AMAZON_ORDER_PREFIXES)]
-    if len(kept) < len(txns):
-        skipped["amazon order charge"] += len(txns) - len(kept)
-    txns = kept
+    txns = _drop(txns, skipped, _is_amazon_order_charge, "amazon order charge")
 
     # Accounts that export full history (e.g. FakeMart) carry a cutoff in accounts.json.
     if config.ignore_before is not None:
-        kept = [t for t in txns if t.date >= config.ignore_before]
-        dropped = len(txns) - len(kept)
-        if dropped:
-            skipped[f"before {config.ignore_before.isoformat()}"] += dropped
-        txns = kept
+        cutoff = config.ignore_before
+        txns = _drop(txns, skipped, lambda t: t.date < cutoff, f"before {cutoff.isoformat()}")
 
     for t in txns:
         t.source_file = f"{path.parent.name}/{path.name}"
