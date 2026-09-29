@@ -96,6 +96,7 @@ class _ItemCost:
     quantity: int
     unit_price: Decimal
     line: Decimal
+    own_tax: Decimal | None      # Amazon's per-Item tax, when shown
     promo: Decimal = Decimal(0)
     tax: Decimal = Decimal(0)
     shipping: Decimal = Decimal(0)
@@ -131,13 +132,12 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
 
     for shipment, group in groups:
         # Shipment tax already includes any per-Item tax Amazon also shows.
-        own = [c for item, c in zip(_non_cancelled(shipment), group) if item.get("tax") is not None]
-        rest = [c for item, c in zip(_non_cancelled(shipment), group) if item.get("tax") is None]
-        for item, cost in zip(_non_cancelled(shipment), group):
-            if item.get("tax") is not None:
-                cost.tax = _money(item["tax"], f"{where} #{cost.position} tax")
+        rest = [c for c in group if c.own_tax is None]
+        for cost in group:
+            if cost.own_tax is not None:
+                cost.tax = cost.own_tax
         tax = _money(_get(shipment, "tax", (int, Decimal), where), f"{where} shipment tax")
-        remainder = max(tax - sum((c.tax for c in own), Decimal(0)), Decimal(0))
+        remainder = max(tax - sum((c.tax for c in group), Decimal(0)), Decimal(0))
         for cost, part in zip(rest, _spread(remainder, [c.net for c in rest])):
             cost.tax = part
 
@@ -159,10 +159,6 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
     return costs
 
 
-def _non_cancelled(shipment) -> list[dict]:
-    return [item for item in shipment["items"] if not item["cancelled"]]
-
-
 def _cancelled(item, where: str) -> bool:
     flag = item.get("cancelled") if isinstance(item, dict) else None
     if not isinstance(flag, bool):
@@ -180,7 +176,9 @@ def _item_cost(item, order_where) -> _ItemCost:
     if quantity < 1:
         raise ImporterError(f"amazon {where}: quantity must be at least 1, got {quantity}")
     unit_price = _money(_get(item, "unit_price", (int, Decimal), where), f"{where} unit_price")
-    return _ItemCost(position, short_name, quantity, unit_price, quantity * unit_price)
+    own_tax = (None if item.get("tax") is None
+               else _money(item["tax"], f"{where} tax"))
+    return _ItemCost(position, short_name, quantity, unit_price, quantity * unit_price, own_tax)
 
 
 def _spread(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
