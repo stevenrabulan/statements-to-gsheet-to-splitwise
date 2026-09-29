@@ -61,7 +61,7 @@ def _write(tmp_path, *orders, schema_version=1):
 
 
 def test_quantity_above_one_prefixes_name_and_multiplies_price(tmp_path):
-    result = _parse(_write(tmp_path, _order(item={"quantity": 2, "unit_price": 12.99, "tax": 2.14})))
+    result = _parse(_write(tmp_path, _order(order_total=28.12, item={"quantity": 2, "unit_price": 12.99, "tax": 2.14})))
     t = result.transactions[0]
     assert t.description == "2× Fakebrand Widget"
     assert t.amount_formula == "=2*12.99+2.14"
@@ -69,7 +69,7 @@ def test_quantity_above_one_prefixes_name_and_multiplies_price(tmp_path):
 
 
 def test_zero_tax_is_left_out_of_the_formula(tmp_path):
-    result = _parse(_write(tmp_path, _order(item={"unit_price": 4.50, "tax": 0})))
+    result = _parse(_write(tmp_path, _order(order_total=4.50, item={"unit_price": 4.50, "tax": 0})))
     t = result.transactions[0]
     assert t.amount_formula == "=4.5"
     assert t.amount == 4.50
@@ -114,10 +114,134 @@ def test_missing_field_names_the_order(tmp_path):
         _parse(_write(tmp_path, order))
 
 
-def test_order_needing_cost_allocation_is_skipped_not_guessed(tmp_path):
-    # Shipment tax with no per-Item tax needs the allocation math, so the
-    # Order is held back rather than written with a wrong Amount.
-    result = _parse(_write(tmp_path, _order(item={"tax": None})))
+def _item(position, unit_price, quantity=1, tax=None, cancelled=False):
+    return {"position": position, "title": f"Fakebrand Thing {position}",
+            "short_name": f"Thing {position}", "quantity": quantity,
+            "unit_price": unit_price, "cancelled": cancelled, "tax": tax}
+
+
+def _shipment(*items, tax=0, shipping=None):
+    return {"shipped": True, "ship_date": "2026-08-11", "tax": tax,
+            "shipping": shipping, "items": list(items)}
+
+
+def _multi(order_total, *shipments, **overrides):
+    return _order(order_total=order_total, shipments=list(shipments), **overrides)
+
+
+def _rows(tmp_path, order):
+    result = _parse(_write(tmp_path, order))
+    return result, {t.key.rsplit("#", 1)[1]: t for t in result.transactions}
+
+
+def test_shipment_tax_is_spread_by_net_price(tmp_path):
+    # tax 1.00 over 30.00 / 10.00 -> 0.75 / 0.25
+    order = _multi(41.00, _shipment(_item(1, 30.00), _item(2, 10.00), tax=1.00))
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=30+0.75"
+    assert rows["2"].amount_formula == "=10+0.25"
+    assert result.warnings == []
+
+
+def test_single_item_shipment_takes_its_tax_exactly(tmp_path):
+    result, rows = _rows(tmp_path, _multi(10.83, _shipment(_item(1, 10.00), tax=0.83)))
+    assert rows["1"].amount_formula == "=10+0.83"
+
+
+def test_own_tax_wins_and_shipment_tax_remainder_goes_to_the_rest(tmp_path):
+    order = _multi(22.00, _shipment(_item(1, 10.00, tax=0.50), _item(2, 10.00), tax=2.00))
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.5"
+    assert rows["2"].amount_formula == "=10+1.5"
+
+
+def test_promo_on_one_item_reduces_only_that_item(tmp_path):
+    order = _multi(17.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0)),
+                   promos=[{"name": "Save $3", "amount": 3.00, "positions": [1]}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10-3"
+    assert rows["1"].amount == 7.00
+    assert rows["2"].amount_formula == "=10"
+
+
+def test_promo_on_several_items_spreads_by_line_price(tmp_path):
+    # line prices 2*10=20 and 10 -> $3 splits 2.00 / 1.00
+    order = _multi(27.00, _shipment(_item(1, 10.00, quantity=2, tax=0), _item(2, 10.00, tax=0)),
+                   promos=[{"name": "Save $3", "amount": 3.00, "positions": [1, 2]}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=2*10-2"
+    assert rows["2"].amount_formula == "=10-1"
+
+
+def test_tax_is_spread_by_price_after_promos(tmp_path):
+    # net 10 and 5 after a $5 promo on #2 -> tax 0.30 splits 0.20 / 0.10
+    order = _multi(15.30, _shipment(_item(1, 10.00), _item(2, 10.00), tax=0.30),
+                   promos=[{"name": "Save $5", "amount": 5.00, "positions": [2]}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.2"
+    assert rows["2"].amount_formula == "=10-5+0.1"
+
+
+def test_shipping_and_whole_order_discount_spread_by_net_price(tmp_path):
+    order = _multi(44.00, _shipment(_item(1, 30.00, tax=0), _item(2, 10.00, tax=0)),
+                   shipping=8.00, discounts=[{"name": "Order discount", "amount": 4.00}])
+    _, rows = _rows(tmp_path, order)
+    # shipping 8 -> 6 / 2, discount 4 -> 3 / 1; discount is a subtraction, last
+    assert rows["1"].amount_formula == "=30+6-3"
+    assert rows["2"].amount_formula == "=10+2-1"
+    assert rows["1"].amount == 33.00
+
+
+def test_shipment_shipping_spreads_only_over_its_shipment(tmp_path):
+    order = _multi(25.00,
+                   _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0), shipping=4.00),
+                   _shipment(_item(3, 1.00, tax=0)))
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+2"
+    assert rows["2"].amount_formula == "=10+2"
+    assert rows["3"].amount_formula == "=1"
+
+
+def test_formula_term_order_is_fixed(tmp_path):
+    order = _multi(15.80, _shipment(_item(1, 10.00, quantity=2, tax=1.00)),
+                   shipping=1.50, discounts=[{"name": "d", "amount": 0.70}],
+                   promos=[{"name": "p", "amount": 6.00, "positions": [1]}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=2*10-6+1+1.5-0.7"
+    assert rows["1"].amount == 15.80
+
+
+def test_rounding_remainder_goes_to_the_largest_part(tmp_path):
+    # $1.00 shipping over three equal Items: 0.33 each, leftover cent to the first largest
+    order = _multi(31.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0),
+                                    _item(3, 10.00, tax=0)), shipping=1.00)
+    _, rows = _rows(tmp_path, order)
+    assert sorted(t.amount for t in rows.values()) == [10.33, 10.33, 10.34]
+    assert sum(t.amount for t in rows.values()) == pytest.approx(31.00)
+
+
+def test_leftover_cent_lands_on_the_larger_item(tmp_path):
+    # $0.01 shipping over 20 and 10: 0.0067 / 0.0033 round to 0.01 / 0.00
+    order = _multi(30.01, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
+                   shipping=0.01)
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=20+0.01"
+    assert rows["2"].amount_formula == "=10"
+
+
+def test_total_mismatch_skips_the_whole_order_with_a_warning(tmp_path):
+    order = _multi(99.99, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0)))
+    result = _parse(_write(tmp_path, order))
     assert result.transactions == []
-    assert result.skipped["needs cost allocation"] == 1
-    assert "111-0000000-0000009" in result.warnings[0]
+    assert result.skipped["total mismatch"] == 2
+    warning = result.warnings[0]
+    assert "111-0000000-0000009" in warning
+    assert "99.99" in warning and "20.00" in warning
+
+
+def test_gift_card_payment_does_not_change_the_math(tmp_path):
+    order = _multi(41.00, _shipment(_item(1, 30.00), _item(2, 10.00), tax=1.00),
+                   payment=[{"type": "gift_card"}])
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=30+0.75"
+    assert result.skipped["total mismatch"] == 0
