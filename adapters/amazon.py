@@ -68,15 +68,17 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     where = f"order {order_number}"
     order_date = _date(_get(order, "order_date", str, where), where)
     shipments = _get(order, "shipments", list, where)
-    items = [item for shipment in shipments
-             for item in _get(shipment, "items", list, where)]
 
     if not _ready(shipments, where):
-        result.skipped["not ready"] += sum(
-            1 for item in items if not _cancelled(item, where))
+        result.skipped["not ready"] += sum(len(_live_items(sh, where)) for sh in shipments)
         return
 
     costs = _loaded_costs(order, shipments, where)
+    cutoff = config.ignore_before
+    if cutoff is not None and all(c.shipped_on < cutoff for c in costs):
+        # Recorded as Charge rows already; its totals are not our concern.
+        result.skipped[f"before {cutoff.isoformat()}"] += len(costs)
+        return
     expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
     calculated = sum((c.loaded for c in costs), Decimal(0))
     if calculated != expected:
@@ -91,10 +93,16 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     if warning:
         result.warnings.append(warning)
     for cost in costs:
-        if config.ignore_before is not None and cost.shipped_on < config.ignore_before:
-            result.skipped[f"before {config.ignore_before.isoformat()}"] += 1
+        if cutoff is not None and cost.shipped_on < cutoff:
+            result.skipped[f"before {cutoff.isoformat()}"] += 1
             continue
         result.transactions.append(_item_row(cost, order_number, order_date, account))
+
+
+def _live_items(shipment, where: str) -> list:
+    """The shipment's Items that were not cancelled."""
+    return [item for item in _get(shipment, "items", list, where)
+            if not _cancelled(item, where)]
 
 
 def _ready(shipments, where: str) -> bool:
@@ -103,8 +111,7 @@ def _ready(shipments, where: str) -> bool:
         shipped = shipment.get("shipped")
         if not isinstance(shipped, bool):
             raise ImporterError(f"amazon {where}: shipment 'shipped' must be true or false, got {shipped!r}")
-        if not shipped and any(not _cancelled(item, where)
-                               for item in _get(shipment, "items", list, where)):
+        if not shipped and _live_items(shipment, where):
             return False
     return True
 
@@ -117,7 +124,7 @@ class _ItemCost:
     unit_price: Decimal
     line: Decimal
     own_tax: Decimal | None      # Amazon's per-Item tax, when shown
-    shipped_on: date | None = None   # its shipment's ship date; the cutoff compares this
+    shipped_on: date             # its shipment's ship date; the cutoff compares this
     promo: Decimal = Decimal(0)
     tax: Decimal = Decimal(0)
     shipping: Decimal = Decimal(0)
@@ -137,12 +144,9 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
     then tax, then shipping and whole-Order discounts."""
     groups = []     # [(shipment, [_ItemCost])], so shipment-scope spreads know their Items
     for shipment in shipments:
-        costs = [_item_cost(item, where) for item in _get(shipment, "items", list, where)
-                 if not _cancelled(item, where)]
-        if costs:
-            shipped_on = _date(_get(shipment, "ship_date", str, where), where)
-            for cost in costs:
-                cost.shipped_on = shipped_on
+        live = _live_items(shipment, where)
+        shipped_on = _date(_get(shipment, "ship_date", str, where), where) if live else None
+        costs = [_item_cost(item, where, shipped_on) for item in live]
         groups.append((shipment, costs))
     costs = [c for _, group in groups for c in group]
 
@@ -191,7 +195,7 @@ def _cancelled(item, where: str) -> bool:
     return flag
 
 
-def _item_cost(item, order_where) -> _ItemCost:
+def _item_cost(item, order_where, shipped_on: date) -> _ItemCost:
     position = _get(item, "position", int, order_where)
     where = f"{order_where} #{position}"
     short_name = _get(item, "short_name", str, where).strip()
@@ -203,7 +207,8 @@ def _item_cost(item, order_where) -> _ItemCost:
     unit_price = _money(_get(item, "unit_price", (int, Decimal), where), f"{where} unit_price")
     own_tax = (None if item.get("tax") is None
                else _money(item["tax"], f"{where} tax"))
-    return _ItemCost(position, short_name, quantity, unit_price, quantity * unit_price, own_tax)
+    return _ItemCost(position, short_name, quantity, unit_price, quantity * unit_price,
+                     own_tax, shipped_on)
 
 
 def _spread(total: Decimal, weights: list[Decimal]) -> list[Decimal]:

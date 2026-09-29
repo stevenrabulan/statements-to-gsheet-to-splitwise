@@ -322,3 +322,13 @@ def test_generic_cutoff_is_not_applied_again_to_amazon_rows(amazon_month, tmp_pa
     rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")],
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     assert [row[10] for row in _sheet_rows(wr)] == [AMAZON_NOTE]
+
+
+def test_amazon_item_shipped_before_cutoff_is_dropped_once_and_counted(amazon_month, tmp_path, capsys):
+    src = json.loads(AMAZON_FIXTURE.read_text())
+    src["orders"][0]["shipments"][0]["ship_date"] = "2026-07-20"
+    f = amazon_month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps(src))
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert "'before 2026-07-29': 1" in capsys.readouterr().out

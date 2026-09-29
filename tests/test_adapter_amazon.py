@@ -317,3 +317,12 @@ def test_no_cutoff_configured_imports_everything(tmp_path):
     result = amazon.parse_orders(_write(tmp_path, order), config=AccountConfig("Amazon"),
                                  accounts=ACCOUNTS)
     assert len(result.transactions) == 1
+
+
+def test_order_entirely_before_the_cutoff_is_ignored_even_if_totals_disagree(tmp_path):
+    order = _multi(99.99, _shipment_on("2026-07-20", _item(1, 10.00, tax=0)))
+    result = _parse(_write(tmp_path, order))
+    assert result.transactions == []
+    assert result.skipped["before 2026-07-29"] == 1
+    assert result.skipped["total mismatch"] == 0
+    assert result.warnings == []

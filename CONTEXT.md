@@ -22,8 +22,12 @@ _Avoid_: Purchase, Amazon transaction
 One line on an Order (a product, possibly with quantity greater than 1). For Amazon, an Item is the unit that gets one sheet row.
 _Avoid_: Product, line, SKU
 
+**Ready Order**:
+An Amazon Order whose non-cancelled Items have all shipped. Only a Ready Order is imported; the rest are held for a later scrape.
+_Avoid_: Complete order, finished order
+
 **Cutoff Date**:
-The first day of spending tracked for an Account or for Amazon Orders; anything earlier was recorded some other way and is ignored.
+The first day of spending tracked for an Account or for Amazon Orders; anything earlier was recorded some other way and is ignored. For Amazon it is compared with an Item's shipment ship date, not the Order Date.
 _Avoid_: Start date, ignore date
 
 ### Cost
