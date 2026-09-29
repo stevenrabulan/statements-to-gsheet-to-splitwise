@@ -4,11 +4,17 @@
 
 **Blocked by:** None, can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Charges whose description starts with `Amazon.com*`, `AMAZON MKTPL*`, or `AMZN Mktp*` (case-insensitive) are dropped for every Account.
-- [ ] Refund credits with those descriptors are dropped too.
-- [ ] Whole Foods, Prime membership, Prime Video, Kindle, and Audible Charges still import.
-- [ ] The per-file summary counts dropped Charges under a clear skipped reason (e.g. "amazon order charge").
-- [ ] Tested through the CLI run with the sheet faked: a Chase CSV that has Amazon order Charges and a Whole Foods Charge writes only the Whole Foods row.
-- [ ] Existing tests still pass.
+- [x] Charges whose description starts with `Amazon.com*`, `AMAZON MKTPL*`, or `AMZN Mktp*` (case-insensitive) are dropped for every Account.
+- [x] Refund credits with those descriptors are dropped too.
+- [x] Whole Foods, Prime membership, Prime Video, Kindle, and Audible Charges still import.
+- [x] The per-file summary counts dropped Charges under a clear skipped reason (e.g. "amazon order charge").
+- [x] Tested through the CLI run with the sheet faked: a Chase CSV that has Amazon order Charges and a Whole Foods Charge writes only the Whole Foods row.
+- [x] Existing tests still pass.
+
+## Comments
+
+- Implemented in `main.py` (`_is_amazon_order_charge`, applied to every card adapter, CSV and PDF). The `AMZN Mktp` prefix is matched without the `*`, because real descriptors read `AMZN Mktp US*...`.
+- Follow-up for ticket 02: the filter runs on every file today, so the Amazon JSON adapter must bypass it, or Item rows could be dropped.
+- Not matched: the older descriptor `AMAZON MKTPLACE PMTS` (no `*`). Add it only if it shows up in real data.
