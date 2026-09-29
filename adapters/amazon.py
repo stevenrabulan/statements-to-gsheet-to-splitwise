@@ -25,11 +25,19 @@ CENT = Decimal("0.01")
 # "amazon <order number> #<position>", plus " refund <date> <amount>" on a Refund.
 # Matched as whole words, so "#1" never matches "#10" and an Item key never
 # matches its Refund's key.
-KEY_PATTERN = re.compile(r"(?<!\S)amazon \S+ #\d+(?: refund \S+ \S+)?(?!\S)")
+_ITEM_KEY = r"amazon \S+ #\d+"
+KEY_PATTERN = re.compile(rf"(?<!\S){_ITEM_KEY}(?: refund \S+ \S+)?(?!\S)")
+# Fullmatched against a KEY_PATTERN match: an Item's key, not a Refund's.
+ITEM_KEY_PATTERN = re.compile(_ITEM_KEY)
 
 
 def item_key(order_number: str, position: int) -> str:
     return f"amazon {order_number} #{position}"
+
+
+def refund_key(item: str, refund_date: date, amount: Decimal) -> str:
+    """Date and amount keep several partial refunds on one Item distinct."""
+    return f"{item} refund {refund_date.isoformat()} {amount:.2f}"
 
 
 def parse_orders(path: Path, config: AccountConfig,
@@ -40,8 +48,14 @@ def parse_orders(path: Path, config: AccountConfig,
         raise ImporterError(f"{path.name}: amazon: an accounts.json entry is required")
     data = _load(path)
     result = ParseResult()
+    orders = {}
     for order in _get(data, "orders", list, "file"):
         _parse_order(order, config, accounts, result)
+        if order["order_number"] in orders:
+            raise ImporterError(f"amazon order {order['order_number']}: listed twice in the file")
+        orders[order["order_number"]] = order
+    for refund in _get(data, "refunds", list, "file"):
+        _parse_refund(refund, orders, config, accounts, result)
     return result
 
 
@@ -97,6 +111,64 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
             result.skipped[f"before {cutoff.isoformat()}"] += 1
             continue
         result.transactions.append(_item_row(cost, order_number, order_date, account))
+
+
+def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -> None:
+    """A Refund becomes a plain negative row. Its classification is copied from
+    the Item's sheet row later, by the CLI, which can see the sheet."""
+    order_number = _get(refund, "order_number", str, "refund")
+    position = _get(refund, "position", int, f"refund on order {order_number}")
+    where = f"order {order_number} #{position}"
+    amount = _money(_get(refund, "amount", (int, Decimal), f"{where} refund"),
+                    f"{where} refund amount")
+    if amount <= 0:
+        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
+    refund_date = _date(_get(refund, "refund_date", str, f"{where} refund"), f"{where} refund")
+    what = f"Refund of {amount:.2f} on {refund_date.isoformat()}"
+
+    order = orders.get(order_number)
+    found = _shipped_item(order, position, where) if order else None
+    if found is None:
+        result.skipped["refund without item"] += 1
+        result.warnings.append(f"amazon {where}: {what} matches no shipped Item in this file; "
+                               f"Refund skipped, enter it by hand")
+        return
+    short_name, shipped_on = found
+    cutoff = config.ignore_before
+    if cutoff is not None and shipped_on < cutoff:
+        # The Item is a Charge row from before Item rows existed.
+        result.skipped[f"refund before {cutoff.isoformat()}"] += 1
+        result.warnings.append(f"amazon {where}: {what} is for an Item shipped "
+                               f"{shipped_on.isoformat()}, before the {cutoff.isoformat()} "
+                               f"cutoff; Refund skipped, enter it by hand")
+        return
+
+    account, warning = _payment_method(_get(order, "payment", list, f"order {order_number}"),
+                                       f"order {order_number}", config, accounts)
+    if warning and warning not in result.warnings:
+        result.warnings.append(warning)
+    item = item_key(order_number, position)
+    result.transactions.append(Transaction(
+        date=refund_date,
+        description=f"Refund: {short_name}",
+        amount=-float(amount),
+        account=account,
+        key=refund_key(item, refund_date, amount),
+        refunds=item,
+    ))
+
+
+def _shipped_item(order, position: int, where: str) -> tuple[str, date] | None:
+    """(short name, ship date) of the Order's shipped, non-cancelled Item at
+    `position`, or None when there is no such Item."""
+    for shipment in _get(order, "shipments", list, where):
+        if shipment.get("shipped") is not True:
+            continue
+        for item in _live_items(shipment, where):
+            if item.get("position") == position:
+                return (_get(item, "short_name", str, where).strip(),
+                        _date(_get(shipment, "ship_date", str, where), where))
+    return None
 
 
 def _live_items(shipment, where: str) -> list:

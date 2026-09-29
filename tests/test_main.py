@@ -332,3 +332,112 @@ def test_amazon_item_shipped_before_cutoff_is_dropped_once_and_counted(amazon_mo
     rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     wr.assert_not_called()
     assert "'before 2026-07-29': 1" in capsys.readouterr().out
+
+
+AMAZON_REFUND_NOTE = f"{AMAZON_NOTE} refund 2026-08-20 12.99"
+
+
+def _amazon_file_with_refund(month):
+    src = json.loads(AMAZON_FIXTURE.read_text())
+    src["refunds"] = [{"order_number": "111-0000000-0000001", "position": 1,
+                       "amount": 12.99, "refund_date": "2026-08-20"}]
+    f = month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps(src))
+    return f
+
+
+def _item_row(send_to_splitwise, for_who):
+    return [46237, 14.07, "Fakebrand ForceFlex Trash Bags", "", send_to_splitwise, "",
+            "Amazon Card", for_who, "", "", AMAZON_NOTE]
+
+
+@pytest.mark.parametrize("send_to_splitwise, for_who", [
+    (False, "Both"),        # Personal: unticked, stays out of Splitwise
+    (True, "Partner"),        # Partner's: credits her in full
+])
+def test_refund_copies_the_item_rows_classification(amazon_month, tmp_path,
+                                                    send_to_splitwise, for_who):
+    f = _amazon_file_with_refund(amazon_month)
+    rd, wr = _run([str(f)], existing_rows=[_item_row(send_to_splitwise, for_who)],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    [refund] = _sheet_rows(wr)
+    assert refund[0] == "08/20/2026"
+    assert refund[1] == -12.99
+    assert refund[4] is send_to_splitwise
+    assert refund[7] == for_who
+    assert refund[10] == AMAZON_REFUND_NOTE
+
+
+def test_refund_for_an_item_in_the_same_run_takes_the_defaults(amazon_month, tmp_path):
+    f = _amazon_file_with_refund(amazon_month)
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    item, refund = _sheet_rows(wr)
+    assert item[10] == AMAZON_NOTE
+    assert refund[1] == -12.99
+    assert refund[4] is True
+    assert refund[7] is None
+
+
+def test_rescrape_does_not_duplicate_a_refund(amazon_month, tmp_path):
+    f = _amazon_file_with_refund(amazon_month)
+    existing = [_item_row(False, "Both"),
+                [46254, -12.99, "Refund: Fakebrand ForceFlex Trash Bags", "", False, "",
+                 "Amazon Card", "Both", "", "",
+                 AMAZON_REFUND_NOTE]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+
+
+def test_refund_is_not_mistaken_for_its_item_row(amazon_month, tmp_path):
+    # An existing Refund row's Notes contain the Item key; it must not stand in
+    # for the Item row itself.
+    f = _amazon_file_with_refund(amazon_month)
+    existing = [[46254, -1.00, "Refund", "", False, "", "Amazon Card", "Both", "", "",
+                 f"{AMAZON_NOTE} refund 2026-08-10 1.00"]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    item, refund = _sheet_rows(wr)
+    assert item[10] == AMAZON_NOTE
+    assert refund[4] is True and refund[7] is None
+
+
+def test_refund_whose_item_row_is_missing_is_held_with_a_warning(amazon_month, tmp_path, capsys):
+    # The Item's Order failed the total check, so no Item row exists anywhere.
+    f = _amazon_file_with_refund(amazon_month)
+    src = json.loads(f.read_text())
+    src["orders"][0]["order_total"] = 99.99
+    f.write_text(json.dumps(src))
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    out = capsys.readouterr().out
+    assert "'refund without item row': 1" in out
+    assert "111-0000000-0000001 #1" in out and "12.99" in out
+
+
+def test_refund_whose_item_row_has_an_odd_e_cell_is_held_not_fatal(amazon_month, tmp_path, capsys):
+    f = _amazon_file_with_refund(amazon_month)
+    rd, wr = _run([str(f)], existing_rows=[_item_row("yes", "Partner")],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert "'refund with unreadable item row': 1" in capsys.readouterr().out
+
+
+def test_odd_e_cell_on_an_unrelated_item_row_does_not_block_a_card_import(csv_file, tmp_path):
+    rd, wr = _run([str(csv_file)], existing_rows=[_item_row("yes", "Partner")],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_called_once()
+
+
+def test_refund_already_in_the_sheet_does_not_warn_when_its_item_row_is_gone(
+        amazon_month, tmp_path, capsys):
+    f = _amazon_file_with_refund(amazon_month)
+    src = json.loads(f.read_text())
+    src["orders"][0]["order_total"] = 99.99      # no Item row this run either
+    f.write_text(json.dumps(src))
+    existing = [[46254, -12.99, "Refund", "", False, "", "Amazon Card", "Both",
+                 "", "", AMAZON_REFUND_NOTE]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert "refund without item row" not in capsys.readouterr().out

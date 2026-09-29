@@ -19,7 +19,7 @@ import import_log
 from adapters import detect_adapter, SOURCE_MAP
 from models import AccountConfig, ImporterError
 from csv_reader import read_csv
-from dedup import dedup, existing_keys_from_rows
+from dedup import amazon_classifications, dedup, existing_keys_from_rows
 from date_filter import in_window
 from sheets_writer import (
     CREDENTIALS_FILE,
@@ -46,6 +46,37 @@ def _drop(txns, skipped: Counter, should_drop, reason: str):
     dropped = len(txns) - len(kept)
     if dropped:
         skipped[reason] += dropped
+    return kept
+
+
+def _classify_refunds(txns, classifications: dict, run_items: set, skipped: Counter,
+                      warnings: list):
+    """Give each Refund its Item's classification: copied from the Item's sheet
+    row, or the defaults when the Item is imported in this run. A Refund whose
+    Item row exists nowhere, or whose row's E/H cells can't be copied, is held
+    with a warning; a later scrape brings it back."""
+    kept = []
+    for t in txns:
+        if t.refunds is None:
+            kept.append(t)
+            continue
+        what = f"{t.refunds}: Refund of {-t.amount:.2f} on {t.date.isoformat()}"
+        if t.refunds in classifications:
+            send, for_who = classifications[t.refunds]
+            if not isinstance(send, bool) or not isinstance(for_who, str):
+                skipped["refund with unreadable item row"] += 1
+                warnings.append(f"{what}: the Item's sheet row has Send to Splitwise "
+                                f"{send!r} and For who {for_who!r}, expected a checkbox "
+                                f"and text; skipped until the row is fixed")
+                continue
+            t.send_to_splitwise, t.for_who = send, for_who or None
+            kept.append(t)
+        elif t.refunds in run_items:
+            kept.append(t)
+        else:
+            skipped["refund without item row"] += 1
+            warnings.append(f"{what} has no Item row in the sheet or this run; "
+                            f"skipped until it does")
     return kept
 
 
@@ -151,9 +182,12 @@ def run(args) -> None:
     log_path = import_log.LOG_PATH
     log = import_log.load_log(log_path)
     can_dedup = CREDENTIALS_FILE_EXISTS
+    classifications = {}
     if can_dedup:
         try:
-            existing = existing_keys_from_rows(read_existing_rows())
+            rows = read_existing_rows()
+            existing = existing_keys_from_rows(rows)
+            classifications = amazon_classifications(rows)
         except ImporterError as exc:
             sys.exit(f"ERROR: {exc}")
     else:
@@ -179,6 +213,9 @@ def run(args) -> None:
             txns = [t for t in txns if in_window(t.date, lo, hi)]
 
         new = dedup(txns, existing) if can_dedup and not args.force else txns
+        # After dedup, so a Refund already in the sheet never warns again.
+        run_items = {t.key for t in to_append + txns if t.key and t.refunds is None}
+        new = _classify_refunds(new, classifications, run_items, skipped, warnings)
         for w in warnings:
             print(f"  WARN {path.name}: {w}")
         print(f"{path.name}: adapter={name} account={account!r} "

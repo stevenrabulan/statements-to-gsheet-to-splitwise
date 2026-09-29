@@ -53,10 +53,10 @@ def _order(**overrides):
     return order
 
 
-def _write(tmp_path, *orders, schema_version=1):
+def _write(tmp_path, *orders, schema_version=1, refunds=()):
     f = tmp_path / "amazon-orders-2026-09-28.json"
     f.write_text(json.dumps({"schema_version": schema_version, "scraped_on": "2026-09-28",
-                             "orders": list(orders), "refunds": []}))
+                             "orders": list(orders), "refunds": list(refunds)}))
     return f
 
 
@@ -326,3 +326,75 @@ def test_order_entirely_before_the_cutoff_is_ignored_even_if_totals_disagree(tmp
     assert result.skipped["before 2026-07-29"] == 1
     assert result.skipped["total mismatch"] == 0
     assert result.warnings == []
+
+
+def _refund(amount, refund_date="2026-08-20", order_number="111-0000000-0000009", position=1):
+    return {"order_number": order_number, "position": position,
+            "amount": amount, "refund_date": refund_date}
+
+
+def _refund_rows(result):
+    return [t for t in result.transactions if t.refunds]
+
+
+def test_refund_becomes_a_negative_row_on_the_refund_date(tmp_path):
+    result = _parse(_write(tmp_path, _order(), refunds=[_refund(10.83)]))
+    [refund] = _refund_rows(result)
+    assert refund.date == date(2026, 8, 20)
+    assert refund.amount == -10.83
+    assert refund.amount_formula is None
+    assert refund.description == "Refund: Fakebrand Widget"
+    assert refund.account == "Amazon Card"
+    assert refund.key == "amazon 111-0000000-0000009 #1 refund 2026-08-20 10.83"
+    assert refund.refunds == "amazon 111-0000000-0000009 #1"
+    assert result.warnings == []
+
+
+def test_several_partial_refunds_on_one_item_stay_distinct(tmp_path):
+    result = _parse(_write(tmp_path, _order(), refunds=[
+        _refund(3.00, "2026-08-20"), _refund(3.00, "2026-08-25"), _refund(2.50, "2026-08-25")]))
+    assert [t.key for t in _refund_rows(result)] == [
+        "amazon 111-0000000-0000009 #1 refund 2026-08-20 3.00",
+        "amazon 111-0000000-0000009 #1 refund 2026-08-25 3.00",
+        "amazon 111-0000000-0000009 #1 refund 2026-08-25 2.50",
+    ]
+
+
+def test_refund_on_an_item_shipped_before_the_cutoff_is_skipped_with_a_warning(tmp_path):
+    order = _multi(10.00, _shipment_on("2026-07-20", _item(1, 10.00, tax=0)))
+    result = _parse(_write(tmp_path, order, refunds=[_refund(4.25, "2026-08-02")]))
+    assert result.transactions == []
+    assert result.skipped["refund before 2026-07-29"] == 1
+    [warning] = result.warnings
+    assert "111-0000000-0000009" in warning and "4.25" in warning
+
+
+def test_refund_for_an_order_missing_from_the_file_is_skipped_with_a_warning(tmp_path):
+    result = _parse(_write(tmp_path, _order(),
+                           refunds=[_refund(5.00, order_number="111-0000000-0000077")]))
+    assert _refund_rows(result) == []
+    assert result.skipped["refund without item"] == 1
+    [warning] = result.warnings
+    assert "111-0000000-0000077 #1" in warning and "5.00" in warning
+
+
+def test_refund_for_an_item_in_an_order_not_ready_still_imports(tmp_path):
+    # Item #1 shipped and was returned while #2 is still on its way; the CLI
+    # holds the Refund until Item #1's row exists.
+    order = _multi(20.00,
+                   _shipment_on("2026-08-11", _item(1, 10.00, tax=0)),
+                   _shipment_on(None, _item(2, 10.00, tax=0), shipped=False))
+    result = _parse(_write(tmp_path, order, refunds=[_refund(10.00)]))
+    [refund] = _refund_rows(result)
+    assert refund.refunds == "amazon 111-0000000-0000009 #1"
+
+
+@pytest.mark.parametrize("amount", [0, -1.00, 1.005])
+def test_refund_amount_must_be_positive_cents(tmp_path, amount):
+    with pytest.raises(ImporterError, match="111-0000000-0000009 #1.*refund"):
+        _parse(_write(tmp_path, _order(), refunds=[_refund(amount)]))
+
+
+def test_order_listed_twice_fails_loudly(tmp_path):
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*twice"):
+        _parse(_write(tmp_path, _order(), _order()))

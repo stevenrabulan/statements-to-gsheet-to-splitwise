@@ -6,14 +6,14 @@
 
 **Status:** ready-for-agent
 
-- [ ] Each Refund becomes a row with a plain negative amount (the refund amount Amazon shows), dated on the refund date.
-- [ ] Notes hold `split-transactions automation amazon <order number> #<position> refund <refund date> <amount>`. Re-scrapes don't duplicate Refunds, and several partial refunds on one Item stay distinct.
-- [ ] The row's "Send to Splitwise" and "For who" are copied from the existing sheet row whose Notes contain the Item's key.
-- [ ] If the Item is being imported in the same run, the Refund uses that Item's defaults.
-- [ ] A Refund whose Item shipped before the Cutoff Date is skipped with a warning listing the order number and amount.
-- [ ] CLI-seam tests cover:
-  - [ ] copying an unticked Personal row
-  - [ ] copying a Partner row
-  - [ ] a same-run Item
-  - [ ] a re-scrape with no duplicate Refund
-- [ ] An adapter-seam test covers the pre-cutoff Refund warning.
+- [x] Each Refund becomes a row with a plain negative amount (the refund amount Amazon shows), dated on the refund date.
+- [x] Notes hold `split-transactions automation amazon <order number> #<position> refund <refund date> <amount>`. Re-scrapes don't duplicate Refunds, and several partial refunds on one Item stay distinct.
+- [x] The row's "Send to Splitwise" and "For who" are copied from the existing sheet row whose Notes contain the Item's key.
+- [x] If the Item is being imported in the same run, the Refund uses that Item's defaults.
+- [x] A Refund whose Item shipped before the Cutoff Date is skipped with a warning listing the order number and amount.
+- [x] CLI-seam tests cover:
+  - [x] copying an unticked Personal row
+  - [x] copying a Partner row
+  - [x] a same-run Item
+  - [x] a re-scrape with no duplicate Refund
+- [x] An adapter-seam test covers the pre-cutoff Refund warning.
