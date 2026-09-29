@@ -71,6 +71,11 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     items = [item for shipment in shipments
              for item in _get(shipment, "items", list, where)]
 
+    if not _ready(shipments, where):
+        result.skipped["not ready"] += sum(
+            1 for item in items if not _cancelled(item, where))
+        return
+
     costs = _loaded_costs(order, shipments, where)
     expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
     calculated = sum((c.loaded for c in costs), Decimal(0))
@@ -86,7 +91,22 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     if warning:
         result.warnings.append(warning)
     for cost in costs:
+        if config.ignore_before is not None and cost.shipped_on < config.ignore_before:
+            result.skipped[f"before {config.ignore_before.isoformat()}"] += 1
+            continue
         result.transactions.append(_item_row(cost, order_number, order_date, account))
+
+
+def _ready(shipments, where: str) -> bool:
+    """An Order is ready once every non-cancelled Item's shipment has shipped."""
+    for shipment in shipments:
+        shipped = shipment.get("shipped")
+        if not isinstance(shipped, bool):
+            raise ImporterError(f"amazon {where}: shipment 'shipped' must be true or false, got {shipped!r}")
+        if not shipped and any(not _cancelled(item, where)
+                               for item in _get(shipment, "items", list, where)):
+            return False
+    return True
 
 
 @dataclass
@@ -97,6 +117,7 @@ class _ItemCost:
     unit_price: Decimal
     line: Decimal
     own_tax: Decimal | None      # Amazon's per-Item tax, when shown
+    shipped_on: date | None = None   # its shipment's ship date; the cutoff compares this
     promo: Decimal = Decimal(0)
     tax: Decimal = Decimal(0)
     shipping: Decimal = Decimal(0)
@@ -118,6 +139,10 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
     for shipment in shipments:
         costs = [_item_cost(item, where) for item in _get(shipment, "items", list, where)
                  if not _cancelled(item, where)]
+        if costs:
+            shipped_on = _date(_get(shipment, "ship_date", str, where), where)
+            for cost in costs:
+                cost.shipped_on = shipped_on
         groups.append((shipment, costs))
     costs = [c for _, group in groups for c in group]
 

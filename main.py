@@ -132,7 +132,8 @@ def _adapter_and_transactions(path: Path, args, mapping):
         txns = _drop(txns, skipped, _is_amazon_order_charge, "amazon order charge")
 
     # Accounts that export full history (e.g. FakeMart) carry a cutoff in accounts.json.
-    if config.ignore_before is not None:
+    # Amazon applies its own, against the ship date, inside the adapter.
+    if adapter.NAME != "amazon" and config.ignore_before is not None:
         cutoff = config.ignore_before
         txns = _drop(txns, skipped, lambda t: t.date < cutoff, f"before {cutoff.isoformat()}")
 

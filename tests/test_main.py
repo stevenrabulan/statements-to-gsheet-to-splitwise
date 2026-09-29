@@ -1,3 +1,4 @@
+import json
 import shutil
 from datetime import date
 from pathlib import Path
@@ -311,3 +312,13 @@ def test_non_order_amazon_charges_still_import(tmp_path):
     _, wr = _run_chase(chase, tmp_path)
     appended = wr.call_args[0][0]
     assert sorted(t.description for t in appended) == sorted(kept)
+
+
+def test_generic_cutoff_is_not_applied_again_to_amazon_rows(amazon_month, tmp_path):
+    # Order placed 2026-07-25 (before the cutoff), shipped 2026-08-04 (after): still imported.
+    src = json.loads(AMAZON_FIXTURE.read_text())
+    src["orders"][0]["order_date"] = "2026-07-25"
+    (amazon_month / "amazon-orders-2026-09-28.json").write_text(json.dumps(src))
+    rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert [row[10] for row in _sheet_rows(wr)] == [AMAZON_NOTE]

@@ -245,3 +245,75 @@ def test_gift_card_payment_does_not_change_the_math(tmp_path):
     result, rows = _rows(tmp_path, order)
     assert rows["1"].amount_formula == "=30+0.75"
     assert result.skipped["total mismatch"] == 0
+
+
+# --- readiness, cancelled Items, ship-date cutoff -------------------------------
+
+def _shipment_on(ship_date, *items, shipped=True, tax=0):
+    return {"shipped": shipped, "ship_date": ship_date if shipped else None,
+            "tax": tax, "shipping": None, "items": list(items)}
+
+
+def test_order_with_an_unshipped_shipment_is_held_as_not_ready(tmp_path):
+    order = _multi(20.00,
+                   _shipment_on("2026-08-11", _item(1, 10.00, tax=0)),
+                   _shipment_on(None, _item(2, 10.00, tax=0), shipped=False))
+    result = _parse(_write(tmp_path, order))
+    assert result.transactions == []
+    assert result.skipped["not ready"] == 2
+
+
+def test_cancelled_item_in_unshipped_shipment_does_not_block_the_order(tmp_path):
+    order = _multi(10.00,
+                   _shipment_on("2026-08-11", _item(1, 10.00, tax=0)),
+                   _shipment_on(None, _item(2, 99.00, cancelled=True), shipped=False))
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+    assert result.skipped["not ready"] == 0
+
+
+def test_cancelled_item_plays_no_part_in_tax_spread_or_total_check(tmp_path):
+    order = _multi(21.00,
+                   _shipment_on("2026-08-11", _item(1, 20.00), _item(2, 50.00, cancelled=True),
+                                tax=1.00))
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+    assert rows["1"].amount == 21.00
+    assert result.warnings == []
+
+
+def test_item_shipped_before_the_cutoff_is_skipped_and_counted(tmp_path):
+    order = _multi(10.00, _shipment_on("2026-07-28", _item(1, 10.00, tax=0)))
+    result = _parse(_write(tmp_path, order))
+    assert result.transactions == []
+    assert result.skipped["before 2026-07-29"] == 1
+
+
+def test_item_shipped_on_the_cutoff_day_is_imported(tmp_path):
+    order = _multi(10.00, _shipment_on("2026-07-29", _item(1, 10.00, tax=0)))
+    _, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+
+
+def test_order_placed_before_the_cutoff_but_shipped_after_is_imported(tmp_path):
+    order = _multi(10.00, _shipment_on("2026-07-30", _item(1, 10.00, tax=0)),
+                   order_date="2026-07-25")
+    _, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+
+
+def test_cutoff_is_per_shipment_and_total_check_still_covers_the_whole_order(tmp_path):
+    order = _multi(20.00,
+                   _shipment_on("2026-07-20", _item(1, 10.00, tax=0)),
+                   _shipment_on("2026-08-02", _item(2, 10.00, tax=0)))
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["2"]
+    assert result.skipped["before 2026-07-29"] == 1
+    assert result.warnings == []
+
+
+def test_no_cutoff_configured_imports_everything(tmp_path):
+    order = _multi(10.00, _shipment_on("2020-01-01", _item(1, 10.00, tax=0)))
+    result = amazon.parse_orders(_write(tmp_path, order), config=AccountConfig("Amazon"),
+                                 accounts=ACCOUNTS)
+    assert len(result.transactions) == 1
