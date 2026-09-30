@@ -1,6 +1,6 @@
 # transactions/
 
-Drop your **real account exports** (CSV or PDF statements) here to organize and import them. Everything in this folder is **gitignored** except this README — real financial records are never committed to version control.
+Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon Orders as JSON) here to organize and import them. Everything in this folder is **gitignored** except this README — real financial records are never committed to version control.
 
 (Synthetic test data lives separately under `tests/fixtures/` and is safe to commit.)
 
@@ -110,6 +110,63 @@ You can also pass individual files instead of entire directories:
 
 ---
 
+## Amazon Orders
+
+Amazon spending is recorded **one sheet row per Item**, not from card Charges. Amazon posts one Charge per shipment (`AMAZON MKTPL*...`), which says nothing about what was bought, so card imports drop those Charges and Item rows come from scraped Order data instead. See `docs/adr/0001-*` and `docs/adr/0002-*`.
+
+### 1. Config entry
+
+Add an Amazon entry to `accounts.json` (see `accounts.example.json`):
+
+```json
+"amazon-orders": {
+  "name": "Amazon",
+  "ignore_before": "2026-07-29"
+}
+```
+
+| Setting         | Description                                                                                                                                  |
+| :----------------| :---------------------------------------------------------------------------------------------------------------------------------------------|
+| key             | Must be contained in the scraped filename. `amazon-orders` matches `amazon-orders-2026-09-28.json`.                                          |
+| `name`          | Fallback Payment Method (Column G), used only when an Order's card last four digits match no other `accounts.json` key (a warning is shown). |
+| `ignore_before` | The **Cutoff Date**. Items whose shipment **ship date** is before it are ignored (Orders before it were recorded as Charge rows). Compared with the ship date, not the Order Date. |
+
+Payment Method is set from the card on the Order: its last four digits are matched against `accounts.json` keys that contain them (e.g. key `Chase1111` for a card ending 1111). Gift card only gives "Amazon Gift Card", points only gives "Points", gift card plus card gives the card.
+
+### 2. Scrape, then import (once per billing cycle)
+
+1. Open Chrome, logged in to Amazon, with the Claude in Chrome extension.
+2. Paste the prompt from `scrape-amazon-orders.md`. It reads the last 90 days of Orders and saves `amazon-orders-<run date>.json` into the current month's folder, e.g. `transactions/2026-09/`. It records raw facts only and calculates nothing.
+3. Preview, then import (same commands as cards; the folder import picks up `.json` alongside CSVs and PDFs):
+
+```bash
+.venv/bin/python main.py transactions/2026-09/ --dry-run
+.venv/bin/python main.py transactions/2026-09/
+```
+
+The importer calculates each Item's Loaded Cost (price, minus Promos, plus tax, plus shipping and whole-Order discount shares) and writes it as a formula in Amount, e.g. `=2*12.99-3+1.81+0.42`. `--dry-run`, `--from`/`--to`, `--force`, and the import log work as for cards.
+
+The dry-run summary counts Items left out:
+- `not ready`: an Order with a non-cancelled Item not shipped yet. It is picked up on a later scrape.
+- `total mismatch`: calculated costs did not equal Amazon's Order total. The Order is skipped with a warning naming the expected and calculated totals.
+- cutoff: Items shipped before the Cutoff Date.
+
+Rows are deduplicated by a key in Notes (Column K): `split-transactions automation amazon <order number> #<position>`. Re-scraping never duplicates rows.
+
+Returns and partial refunds arrive on a later scrape as **negative rows** dated on the refund date. They copy "Send to Splitwise" and "For who" from the original Item row. A Refund on an Order shipped before the Cutoff Date is skipped with a warning (enter it by hand).
+
+### 3. The card filter
+
+When importing any card or bank CSV or PDF, Charges (and refund credits) starting with `Amazon.com*`, `AMAZON MKTPL*`, or `AMZN Mktp*` are dropped so Amazon Orders are counted once. The per-file summary shows them as `amazon order charge`. Whole Foods, Prime, Prime Video, Kindle, and Audible Charges still import from the card CSV.
+
+### 4. Classify Items in the sheet
+
+New Item rows default to **Shared** (Column E "Send to Splitwise" ticked, "For who" as card rows get). After importing:
+- **Personal** Item: untick "Send to Splitwise" (E). The row stays recorded so you can reclassify later.
+- **Partner's** Item: set "For who" (H) to Partner.
+
+---
+
 ## Command Line Arguments & Options
 
 | Flag / Option       | Description                                                                                                   | Example                      |
@@ -119,7 +176,7 @@ You can also pass individual files instead of entire directories:
 | `--from YYYY-MM-DD` | Only import transactions dated on or after the specified date.                                                | `--from 2026-06-01`          |
 | `--to YYYY-MM-DD`   | Only import transactions dated on or before the specified date.                                               | `--to 2026-06-30`            |
 | `--account "NAME"`  | Manually set/override the sheet's account label (Column G). Use with single files.                            | `--account "Chase Checking"` |
-| `--source ADAPTER`  | Force the use of a specific parser adapter (`fakecoin`, `discover`, `chase_checking`, `chase_credit`, `fakemart_credit`, `pdf`). | `--source fakecoin`          |
+| `--source ADAPTER`  | Force the use of a specific parser adapter (`fakecoin`, `discover`, `chase_checking`, `chase_credit`, `fakemart_credit`, `amazon`, `pdf`). | `--source fakecoin`          |
 | `--year YYYY`       | Specify the calendar year for PDF statements (as credit card PDFs often omit the year on transaction lines).  | `--year 2026`                |
 
 ---
