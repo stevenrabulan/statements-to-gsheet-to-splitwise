@@ -1,6 +1,6 @@
 # transactions/
 
-Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon Orders as JSON) here to organize and import them. Everything in this folder is **gitignored** except this README — real financial records are never committed to version control.
+Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon Orders as JSON) here to organize and import them. Everything in this folder is **gitignored** except this README. Real financial records are never committed to version control.
 
 (Synthetic test data lives separately under `tests/fixtures/` and is safe to commit.)
 
