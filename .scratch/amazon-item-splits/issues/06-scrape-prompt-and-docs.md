@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (Tracer bullet: one simple Amazon Order becomes one Item row)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The prompt covers Orders from the last 90 days and opens each Order's details or invoice page.
 - [ ] It records exactly the fields in the scraped-file contract (including the schema version) and states plainly that it must not total, allocate, or round anything.
