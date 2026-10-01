@@ -1,4 +1,4 @@
-# 07: First real run
+# 15: First real run
 
 **What to build:** Steven runs the full workflow once on real data and confirms the two assumptions the spec couldn't settle from code: "For who" fills in for new Item rows the same way it does for card rows, and Amazon's Item positions stay the same between scrapes (the Item key depends on it).
 
@@ -16,3 +16,4 @@
 
 - 2026-09-30: Dropped the step "Re-import the Chase2222 CSV". Steven no longer imports the Amazon card (grilling, Q10).
 - 2026-09-30: First scrape done on schema version 1 (60 Orders, 2 Refunds). It exposed the gaps now covered by the spec addendum and tickets 08 to 14. The run restarts after 14 with a fresh version 2 scrape.
+- 2026-10-01: Renumbered from 07 to 15 so the number matches the order of work. It runs last, after 08 to 14. There is no ticket 07 any more.

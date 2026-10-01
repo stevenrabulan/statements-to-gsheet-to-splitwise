@@ -23,4 +23,4 @@
 
 ## Comments
 
-- 2026-09-30: On the first run the side panel reported saving into `transactions/2026-09/` but the file existed only in its own sandbox, and Steven had to ask for a download link. Steven chose to run the scrape from Claude Code, with the side panel as the fallback. A scrape of about 60 Orders has not been tried from Claude Code yet, so ticket 07's run is the first test of it.
+- 2026-09-30: On the first run the side panel reported saving into `transactions/2026-09/` but the file existed only in its own sandbox, and Steven had to ask for a download link. Steven chose to run the scrape from Claude Code, with the side panel as the fallback. A scrape of about 60 Orders has not been tried from Claude Code yet, so ticket 15's run is the first test of it.
