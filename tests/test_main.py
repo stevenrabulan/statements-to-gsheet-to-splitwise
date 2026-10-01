@@ -534,3 +534,123 @@ def test_rescrape_does_not_duplicate_a_split_refund(amazon_month, tmp_path):
     rd, wr = _run([str(f)], existing_rows=existing,
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     wr.assert_not_called()
+
+
+# --- Whole Foods Orders ----------------------------------------------------------
+
+WF_NOTE = "split-transactions automation amazon 111-0000000-0000002"
+
+
+def _whole_foods_file(month, order_date="2026-09-11", refunds=()):
+    f = month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps({
+        "schema_version": 2, "scraped_on": "2026-09-28",
+        "orders": [{
+            "kind": "whole_foods", "order_number": "111-0000000-0000002",
+            "order_date": order_date, "delivered": True,
+            "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+            "order_total": 113.99,
+            "charges": [{"name": "Subtotal", "amount": 106.99},
+                        {"name": "Driver tip", "amount": 7.00}],
+            "discounts": [],
+        }],
+        "refunds": list(refunds)}))
+    return f
+
+
+def _wf_refund(amount=4.99, refund_date="2026-09-12"):
+    return {"order_number": "111-0000000-0000002", "positions": [],
+            "amount": amount, "refund_date": refund_date}
+
+
+def _wf_order_row(send_to_splitwise, for_who):
+    return [46276, 113.99, "Whole Foods", "", send_to_splitwise, "", "Amazon Card",
+            for_who, "", "", WF_NOTE]
+
+
+def test_whole_foods_order_writes_one_row_with_the_formula_and_key(amazon_month, tmp_path):
+    f = _whole_foods_file(amazon_month)
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    [row] = _sheet_rows(wr)
+    assert row[0] == "09/11/2026"
+    assert row[1] == "=106.99+7"
+    assert row[2] == "Whole Foods"
+    assert row[4] is True and row[7] is None
+    assert row[6] == "Amazon Card"
+    assert row[10] == WF_NOTE
+
+
+def test_rescrape_of_a_whole_foods_order_writes_nothing(amazon_month, tmp_path):
+    f = _whole_foods_file(amazon_month)
+    rd, wr = _run([str(f)], existing_rows=[_wf_order_row(False, "Both")],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+
+
+def test_whole_foods_order_before_the_cutoff_is_not_written(amazon_month, tmp_path, capsys):
+    f = _whole_foods_file(amazon_month, order_date="2026-07-28")
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert "'before 2026-07-29': 1" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("send_to_splitwise, for_who", [
+    (False, "Both"),
+    (True, "Partner"),
+])
+def test_whole_foods_refund_copies_the_order_rows_classification(amazon_month, tmp_path,
+                                                                 send_to_splitwise, for_who):
+    f = _whole_foods_file(amazon_month, refunds=[_wf_refund()])
+    rd, wr = _run([str(f)], existing_rows=[_wf_order_row(send_to_splitwise, for_who)],
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    [refund] = _sheet_rows(wr)
+    assert refund[0] == "09/12/2026"
+    assert refund[1] == -4.99
+    assert refund[2] == "Refund: Whole Foods"
+    assert refund[4] is send_to_splitwise
+    assert refund[7] == for_who
+    assert refund[10] == f"{WF_NOTE} refund 2026-09-12 4.99"
+
+
+def test_whole_foods_refund_in_the_same_run_takes_the_defaults(amazon_month, tmp_path):
+    f = _whole_foods_file(amazon_month, refunds=[_wf_refund()])
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    order, refund = _sheet_rows(wr)
+    assert order[10] == WF_NOTE
+    assert refund[1] == -4.99 and refund[4] is True and refund[7] is None
+
+
+def test_rescrape_does_not_duplicate_a_whole_foods_refund(amazon_month, tmp_path):
+    f = _whole_foods_file(amazon_month, refunds=[_wf_refund()])
+    existing = [_wf_order_row(False, "Both"),
+                [46277, -4.99, "Refund: Whole Foods", "", False, "", "Amazon Card",
+                 "Both", "", "", f"{WF_NOTE} refund 2026-09-12 4.99"]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+
+
+def test_a_whole_foods_refund_row_does_not_stand_in_for_its_order_row(amazon_month, tmp_path):
+    f = _whole_foods_file(amazon_month)
+    existing = [[46277, -4.99, "Refund: Whole Foods", "", False, "", "Amazon Card",
+                 "Both", "", "", f"{WF_NOTE} refund 2026-09-12 4.99"]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert [row[10] for row in _sheet_rows(wr)] == [WF_NOTE]
+
+
+def test_a_whole_foods_order_key_does_not_match_an_item_row_of_the_same_prefix(amazon_month, tmp_path):
+    # Whole word match: a row for "... #1" is not the Order's own row.
+    f = _whole_foods_file(amazon_month)
+    existing = [[46237, 5.00, "Other", "", True, "", "Amazon Card", "", "", "", f"{WF_NOTE} #1"]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert [row[10] for row in _sheet_rows(wr)] == [WF_NOTE]
+
+
+def test_an_item_key_is_not_hidden_by_a_whole_foods_order_row_of_the_same_prefix(amazon_month, tmp_path):
+    existing = [_wf_order_row(True, "")]
+    existing[0][10] = "split-transactions automation amazon 111-0000000-0000001"
+    rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert [row[10] for row in _sheet_rows(wr)] == [AMAZON_NOTE]

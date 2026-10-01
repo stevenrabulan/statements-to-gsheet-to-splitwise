@@ -1,7 +1,7 @@
 from collections import Counter
 from datetime import date, datetime, timedelta
 
-from adapters.amazon import ITEM_KEY_PATTERN as AMAZON_ITEM_KEY_PATTERN
+from adapters.amazon import ROW_KEY_PATTERN as AMAZON_ROW_KEY_PATTERN
 from adapters.amazon import KEY_PATTERN as AMAZON_KEY_PATTERN
 from models import ImporterError, Transaction
 
@@ -99,15 +99,15 @@ def existing_keys_from_rows(rows: list[list]) -> Counter:
 
 
 def amazon_classifications(rows: list[list]) -> dict[str, tuple]:
-    """Map each Amazon Item key in the sheet to its row's raw (Send to Splitwise,
-    For who) cells, cols E and H, so a Refund can copy them. Refund rows are not
-    Item rows and are ignored. The first row wins if an Item appears twice.
+    """Map each Amazon Item key (or Whole Foods Order key) in the sheet to its
+    row's raw (Send to Splitwise, For who) cells, cols E and H, so a Refund can
+    copy them. Refund rows are not Item rows and are ignored. The first row wins if an Item appears twice.
     Values are checked only when a Refund uses them, so one odd cell never
     blocks an unrelated import."""
     found: dict[str, tuple] = {}
     for row in rows:
         for key in _amazon_keys(row):
-            if AMAZON_ITEM_KEY_PATTERN.fullmatch(key) and key not in found:
+            if AMAZON_ROW_KEY_PATTERN.fullmatch(key) and key not in found:
                 found[key] = (row[4], row[7])
     return found
 

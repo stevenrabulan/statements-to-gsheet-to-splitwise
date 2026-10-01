@@ -15,11 +15,13 @@ from models import AccountConfig, ImporterError, ParseResult, Transaction
 NAME = "amazon"
 SCHEMA_VERSION = 2
 
-# Every Order says what it is. Only physical Orders are imported so far; the
-# other kinds are counted as skipped under their CONTEXT.md names.
+# Every Order says what it is. Digital Orders are not imported yet; they are
+# counted as skipped under their CONTEXT.md name.
 _PHYSICAL = "physical"
-_NOT_IMPORTED_YET = {"whole_foods": "Whole Foods Order", "digital": "Digital Order"}
-_KINDS = {_PHYSICAL, *_NOT_IMPORTED_YET}
+_WHOLE_FOODS = "whole_foods"
+_NOT_IMPORTED_YET = {"digital": "Digital Order"}
+_KINDS = {_PHYSICAL, _WHOLE_FOODS, *_NOT_IMPORTED_YET}
+WHOLE_FOODS_LABEL = "Whole Foods"
 
 GIFT_CARD_LABEL = "Amazon Gift Card"
 POINTS_LABEL = "Points"
@@ -28,14 +30,16 @@ _PAYMENT_TYPES = {"card", "gift_card", "points"}
 CENT = Decimal("0.01")
 
 # Every Amazon row's Notes carry a stable key (spec, "Deduplication"):
-# "amazon <order number> #<position>", plus " refund <date> <amount>" on a Refund
-# (the amount of that Item's part when one Refund covers several Items).
-# Matched as whole words, so "#1" never matches "#10" and an Item key never
-# matches its Refund's key.
-_ITEM_KEY = r"amazon \S+ #\d+"
-KEY_PATTERN = re.compile(rf"(?<!\S){_ITEM_KEY}(?: refund \S+ \S+)?(?!\S)")
-# Fullmatched against a KEY_PATTERN match: an Item's key, not a Refund's.
-ITEM_KEY_PATTERN = re.compile(_ITEM_KEY)
+# "amazon <order number> #<position>" for an Item, "amazon <order number>" for a
+# Whole Foods Order, plus " refund <date> <amount>" on a Refund (the amount of
+# that Item's part when one Refund covers several Items).
+# Matched as whole words, longest form first, so "#1" never matches "#10" and an
+# Order key never matches an Item key or a Refund key that starts with it.
+_ROW_KEY = r"amazon \S+(?: #\d+)?"
+KEY_PATTERN = re.compile(rf"(?<!\S){_ROW_KEY}(?: refund \S+ \S+)?(?!\S)")
+# Fullmatched against a KEY_PATTERN match: the key of a row that Refunds point
+# at (an Item or a Whole Foods Order), not a Refund's own key.
+ROW_KEY_PATTERN = re.compile(_ROW_KEY)
 
 # Added after the key in Notes when the ship date was unknown (spec addendum, decision 3).
 UNKNOWN_SHIP_DATE_NOTE = " (ship date unknown, Order Date used for cutoff)"
@@ -44,6 +48,10 @@ UNKNOWN_SHIP_DATE = "unknown ship date"
 
 def item_key(order_number: str, position: int) -> str:
     return f"amazon {order_number} #{position}"
+
+
+def order_key(order_number: str) -> str:
+    return f"amazon {order_number}"
 
 
 def refund_key(item: str, refund_date: date, amount: Decimal) -> str:
@@ -99,6 +107,9 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         result.skipped[f"{_NOT_IMPORTED_YET[kind]} (not imported yet)"] += 1
         return
     order_date = _date(_get(order, "order_date", str, where), where)
+    if kind == _WHOLE_FOODS:
+        _parse_whole_foods(order, order_number, order_date, config, accounts, result)
+        return
     shipments = _get(order, "shipments", list, where)
 
     if not _ready(shipments, where):
@@ -138,6 +149,56 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         result.transactions.append(_item_row(cost, order_number, order_date, account))
 
 
+def _parse_whole_foods(order, order_number: str, order_date: date, config, accounts,
+                       result: ParseResult) -> None:
+    """A Whole Foods Order is one row for the whole Order, tip included, with no
+    Items (decision 7). The cutoff compares the Order Date."""
+    where = f"order {order_number}"
+    delivered = order.get("delivered")
+    if not isinstance(delivered, bool):
+        raise ImporterError(f"amazon {where}: 'delivered' must be true or false, got {delivered!r}")
+    if not delivered:
+        result.skipped["not ready"] += 1
+        return
+    cutoff = config.ignore_before
+    if cutoff is not None and order_date < cutoff:
+        result.skipped[f"before {cutoff.isoformat()}"] += 1
+        return
+
+    charges = _lines(order, "charges", where)
+    if not charges:
+        raise ImporterError(f"amazon {where}: 'charges' must list at least one line")
+    discounts = _lines(order, "discounts", where)
+    expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
+    calculated = sum(charges, Decimal(0)) - sum(discounts, Decimal(0))
+    if calculated != expected:
+        result.skipped["total mismatch"] += 1
+        result.warnings.append(
+            f"amazon {where}: expected total {expected:.2f} but calculated {calculated:.2f}; "
+            f"Order skipped")
+        return
+
+    account, warning = _payment_method(_get(order, "payment", list, where),
+                                       where, config, accounts)
+    if warning:
+        result.warnings.append(warning)
+    formula = "+".join(_dollars(a) for a in charges) + "".join(f"-{_dollars(a)}" for a in discounts)
+    result.transactions.append(Transaction(
+        date=order_date,
+        description=WHOLE_FOODS_LABEL,
+        amount=float(calculated),
+        account=account,
+        amount_formula=f"={formula}",
+        key=order_key(order_number),
+    ))
+
+
+def _lines(order, field: str, where: str) -> list[Decimal]:
+    """The dollar amounts of the summary lines Amazon shows under `field`."""
+    return [_money(_get(line, "amount", (int, Decimal), f"{where} {field}"), f"{where} {field}")
+            for line in _get(order, field, list, where)]
+
+
 def _count_before_cutoff(cost: "_ItemCost", cutoff: date, where: str, result: ParseResult) -> None:
     """Count an Item dropped by the cutoff. One that only fell back to the Order
     Date is named in a warning, once per Order, since nothing else says why."""
@@ -159,6 +220,9 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
     order = orders.get(order_number)
     positions = _get(refund, "positions", list, f"refund on order {order_number}")
     order_where = f"order {order_number}"
+    if order is not None and order["kind"] == _WHOLE_FOODS:
+        _parse_whole_foods_refund(refund, order, positions, config, accounts, result)
+        return
     if order is not None and order["kind"] in _NOT_IMPORTED_YET:
         label = _NOT_IMPORTED_YET[order["kind"]]
         amount, refund_date = _refund_amount_and_date(refund, order_where)
@@ -166,6 +230,14 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
         result.warnings.append(
             f"amazon {order_where}: Refund of {amount:.2f} on {refund_date.isoformat()} is on "
             f"a {label}, which is not imported yet; Refund skipped")
+        return
+    if order is None and not positions:
+        # Only a Whole Foods Order has no positions, but this one is not in the file.
+        amount, refund_date = _refund_amount_and_date(refund, order_where)
+        result.skipped["refund without item"] += 1
+        result.warnings.append(f"amazon {order_where}: Refund of {amount:.2f} on "
+                               f"{refund_date.isoformat()} matches no Order in this file; "
+                               f"Refund skipped, enter it by hand")
         return
     if (not positions or len(set(positions)) != len(positions)
             or any(isinstance(p, bool) or not isinstance(p, int) for p in positions)):
@@ -211,6 +283,44 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
             key=refund_key(item, refund_date, part),
             refunds=item,
         ))
+
+
+def _parse_whole_foods_refund(refund, order, positions: list, config, accounts,
+                              result: ParseResult) -> None:
+    """A Refund on a Whole Foods Order is one negative row against the Order row
+    (decision 8). Like an Item Refund it is imported whether or not the Order
+    is delivered; the CLI copies the Order row's classification."""
+    order_number = order["order_number"]
+    where = f"order {order_number}"
+    if positions:
+        raise ImporterError(f"amazon {where}: a Whole Foods Order has no Items, so its "
+                            f"refund 'positions' must be [], got {positions!r}")
+    amount, refund_date = _refund_amount_and_date(refund, where)
+    if amount <= 0:
+        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
+    cutoff = config.ignore_before
+    order_date = _date(_get(order, "order_date", str, where), where)
+    if cutoff is not None and order_date < cutoff:
+        # The Order is a Charge row from before Order rows existed.
+        result.skipped[f"refund before {cutoff.isoformat()}"] += 1
+        result.warnings.append(
+            f"amazon {where}: Refund of {amount:.2f} on {refund_date.isoformat()} is for an "
+            f"Order dated {order_date.isoformat()}, before the {cutoff.isoformat()} cutoff; "
+            f"Refund skipped, enter it by hand")
+        return
+    account, warning = _payment_method(_get(order, "payment", list, where),
+                                       where, config, accounts)
+    if warning and warning not in result.warnings:
+        result.warnings.append(warning)
+    row = order_key(order_number)
+    result.transactions.append(Transaction(
+        date=refund_date,
+        description=f"Refund: {WHOLE_FOODS_LABEL}",
+        amount=-float(amount),
+        account=account,
+        key=refund_key(row, refund_date, amount),
+        refunds=row,
+    ))
 
 
 def _refund_amount_and_date(refund, where: str) -> tuple[Decimal, date]:

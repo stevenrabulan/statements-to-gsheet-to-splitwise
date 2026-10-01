@@ -287,26 +287,162 @@ def test_gift_card_payment_does_not_change_the_math(tmp_path):
     assert result.skipped["total mismatch"] == 0
 
 
-@pytest.mark.parametrize("kind, reason", [
-    ("whole_foods", "Whole Foods Order (not imported yet)"),
-    ("digital", "Digital Order (not imported yet)"),
-])
-def test_kinds_not_imported_yet_are_skipped_and_counted(tmp_path, kind, reason):
-    other = {"kind": kind, "order_number": "111-0000000-0000050", "order_total": 9.99}
+def test_digital_orders_are_skipped_and_counted(tmp_path):
+    other = {"kind": "digital", "order_number": "D01-0000000-0000050", "order_total": 9.99}
     result = _parse(_write(tmp_path, _order(), other))
     assert [t.key for t in result.transactions] == ["amazon 111-0000000-0000009 #1"]
-    assert result.skipped[reason] == 1
+    assert result.skipped["Digital Order (not imported yet)"] == 1
 
 
-def test_refund_on_a_kind_not_imported_yet_is_skipped_with_a_warning(tmp_path):
-    other = {"kind": "whole_foods", "order_number": "111-0000000-0000050", "order_total": 9.99}
+def test_refund_on_a_digital_order_is_skipped_with_a_warning(tmp_path):
+    other = {"kind": "digital", "order_number": "D01-0000000-0000050", "order_total": 9.99}
     result = _parse(_write(tmp_path, other,
-                           refunds=[_refund(4.99, order_number="111-0000000-0000050")]))
+                           refunds=[_refund(4.99, order_number="D01-0000000-0000050")]))
     assert result.transactions == []
-    assert result.skipped["refund on Whole Foods Order (not imported yet)"] == 1
+    assert result.skipped["refund on Digital Order (not imported yet)"] == 1
     [warning] = result.warnings
-    assert "111-0000000-0000050" in warning and "4.99" in warning
-    assert "Whole Foods Order" in warning
+    assert "D01-0000000-0000050" in warning and "4.99" in warning
+    assert "Digital Order" in warning
+
+
+# --- Whole Foods Orders ----------------------------------------------------------
+
+WF_NUMBER = "111-0000000-0000060"
+
+
+def _whole_foods(**overrides):
+    order = {
+        "kind": "whole_foods", "order_number": WF_NUMBER, "order_date": "2026-09-11",
+        "delivered": True,
+        "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+        "order_total": 113.99,
+        "charges": [{"name": "Subtotal", "amount": 106.99},
+                    {"name": "Driver tip", "amount": 7.00}],
+        "discounts": [],
+    }
+    order.update(overrides)
+    return order
+
+
+def test_whole_foods_order_is_one_row_for_the_whole_order(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods()))
+    [t] = result.transactions
+    assert t.date == date(2026, 9, 11)
+    assert t.description == "Whole Foods"
+    assert t.amount == 113.99
+    assert t.amount_formula == "=106.99+7"
+    assert t.key == f"amazon {WF_NUMBER}"
+    assert t.account == "Amazon Card"
+    assert t.refunds is None
+    assert result.warnings == []
+
+
+def test_whole_foods_discounts_are_subtracted_after_the_charges(tmp_path):
+    order = _whole_foods(order_total=110.49,
+                         charges=[{"name": "Subtotal", "amount": 106.99},
+                                  {"name": "Driver tip", "amount": 7.00},
+                                  {"name": "Bag fee", "amount": 0.50}],
+                         discounts=[{"name": "Promotion", "amount": 4.00}])
+    [t] = _parse(_write(tmp_path, order)).transactions
+    assert t.amount_formula == "=106.99+7+0.5-4"
+    assert t.amount == 110.49
+
+
+def test_whole_foods_total_mismatch_skips_the_order_with_a_warning(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods(order_total=114.99)))
+    assert result.transactions == []
+    assert result.skipped["total mismatch"] == 1
+    [warning] = result.warnings
+    assert WF_NUMBER in warning and "114.99" in warning and "113.99" in warning
+
+
+def test_whole_foods_order_not_delivered_is_held_as_not_ready(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods(delivered=False)))
+    assert result.transactions == []
+    assert result.skipped["not ready"] == 1
+    assert result.warnings == []
+
+
+def test_whole_foods_cutoff_compares_the_order_date(tmp_path):
+    before = _whole_foods(order_date="2026-07-28")
+    on = _whole_foods(order_date="2026-07-29", order_number="111-0000000-0000061")
+    result = _parse(_write(tmp_path, before, on))
+    assert [t.key for t in result.transactions] == ["amazon 111-0000000-0000061"]
+    assert result.skipped["before 2026-07-29"] == 1
+
+
+def test_whole_foods_order_before_the_cutoff_is_ignored_even_if_totals_disagree(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods(order_date="2026-07-01", order_total=1.00)))
+    assert result.transactions == []
+    assert result.skipped["before 2026-07-29"] == 1
+    assert result.skipped["total mismatch"] == 0
+    assert result.warnings == []
+
+
+def test_whole_foods_payment_method_follows_the_same_rules_as_items(tmp_path):
+    gift = _whole_foods(payment=[{"type": "gift_card"}])
+    [t] = _parse(_write(tmp_path, gift)).transactions
+    assert t.account == "Amazon Gift Card"
+    odd = _whole_foods(payment=[{"type": "card", "card_type": "Visa", "last_four": "9999"}])
+    result = _parse(_write(tmp_path, odd))
+    assert result.transactions[0].account == "Amazon"
+    assert "9999" in result.warnings[0]
+
+
+@pytest.mark.parametrize("field, value", [("charges", []), ("delivered", "yes"),
+                                          ("discounts", None)])
+def test_whole_foods_bad_fields_fail_loudly_naming_the_order(tmp_path, field, value):
+    with pytest.raises(ImporterError, match=WF_NUMBER):
+        _parse(_write(tmp_path, _whole_foods(**{field: value})))
+
+
+def test_whole_foods_refund_is_one_negative_row_against_the_order(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods(),
+                           refunds=[_refund(4.99, "2026-09-12", WF_NUMBER, positions=())]))
+    [refund] = _refund_rows(result)
+    assert refund.date == date(2026, 9, 12)
+    assert refund.amount == -4.99
+    assert refund.amount_formula is None
+    assert refund.description == "Refund: Whole Foods"
+    assert refund.account == "Amazon Card"
+    assert refund.key == f"amazon {WF_NUMBER} refund 2026-09-12 4.99"
+    assert refund.refunds == f"amazon {WF_NUMBER}"
+    assert result.warnings == []
+
+
+def test_whole_foods_refund_is_imported_even_if_the_order_is_not_delivered(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods(delivered=False),
+                           refunds=[_refund(4.99, "2026-09-12", WF_NUMBER, positions=())]))
+    assert [t.refunds for t in result.transactions] == [f"amazon {WF_NUMBER}"]
+
+
+def test_whole_foods_refund_on_an_order_before_the_cutoff_is_skipped_with_a_warning(tmp_path):
+    result = _parse(_write(tmp_path, _whole_foods(order_date="2026-07-20"),
+                           refunds=[_refund(4.99, "2026-08-02", WF_NUMBER, positions=())]))
+    assert result.transactions == []
+    assert result.skipped["refund before 2026-07-29"] == 1
+    [warning] = result.warnings
+    assert WF_NUMBER in warning and "4.99" in warning
+
+
+def test_whole_foods_refund_with_positions_fails_loudly(tmp_path):
+    with pytest.raises(ImporterError, match=f"{WF_NUMBER}.*positions"):
+        _parse(_write(tmp_path, _whole_foods(),
+                      refunds=[_refund(4.99, "2026-09-12", WF_NUMBER, positions=(1,))]))
+
+
+def test_refund_with_no_positions_on_a_physical_order_fails_loudly(tmp_path):
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*positions"):
+        _parse(_write(tmp_path, _order(), refunds=[_refund(4.99, positions=())]))
+
+
+def test_refund_with_no_positions_for_an_order_missing_from_the_file_is_skipped(tmp_path):
+    result = _parse(_write(tmp_path, _order(),
+                           refunds=[_refund(4.99, order_number=WF_NUMBER, positions=())]))
+    assert _refund_rows(result) == []
+    assert result.skipped["refund without item"] == 1
+    [warning] = result.warnings
+    assert WF_NUMBER in warning and "4.99" in warning
 
 
 # --- Order-level tax (schema version 2) -----------------------------------------
@@ -773,10 +909,3 @@ def test_the_old_single_position_field_is_rejected(tmp_path):
            "amount": 5.00, "refund_date": "2026-08-20"}
     with pytest.raises(ImporterError, match="111-0000000-0000009.*positions"):
         _parse(_write(tmp_path, _order(), refunds=[old]))
-
-
-def test_refund_with_empty_positions_on_a_whole_foods_order_is_still_skipped_not_fatal(tmp_path):
-    wf = {"kind": "whole_foods", "order_number": "111-0000000-0000050"}
-    result = _parse(_write(tmp_path, wf, refunds=[_refund(4.99, order_number="111-0000000-0000050",
-                                                           positions=[])]))
-    assert result.skipped["refund on Whole Foods Order (not imported yet)"] == 1
