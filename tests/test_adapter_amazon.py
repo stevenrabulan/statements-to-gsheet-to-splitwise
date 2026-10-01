@@ -372,7 +372,7 @@ def _whole_foods(**overrides):
         "delivered": True,
         "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
         "order_total": 113.99,
-        "charges": [{"name": "Subtotal", "amount": 106.99},
+        "additions": [{"name": "Subtotal", "amount": 106.99},
                     {"name": "Driver tip", "amount": 7.00}],
         "discounts": [],
     }
@@ -393,9 +393,9 @@ def test_whole_foods_order_is_one_row_for_the_whole_order(tmp_path):
     assert result.warnings == []
 
 
-def test_whole_foods_discounts_are_subtracted_after_the_charges(tmp_path):
+def test_whole_foods_discounts_are_subtracted_after_the_additions(tmp_path):
     order = _whole_foods(order_total=110.49,
-                         charges=[{"name": "Subtotal", "amount": 106.99},
+                         additions=[{"name": "Subtotal", "amount": 106.99},
                                   {"name": "Driver tip", "amount": 7.00},
                                   {"name": "Bag fee", "amount": 0.50}],
                          discounts=[{"name": "Promotion", "amount": 4.00}])
@@ -445,7 +445,7 @@ def test_whole_foods_payment_method_follows_the_same_rules_as_items(tmp_path):
     assert "9999" in result.warnings[0]
 
 
-@pytest.mark.parametrize("field, value", [("charges", []), ("delivered", "yes"),
+@pytest.mark.parametrize("field, value", [("additions", []), ("delivered", "yes"),
                                           ("discounts", None)])
 def test_whole_foods_bad_fields_fail_loudly_naming_the_order(tmp_path, field, value):
     with pytest.raises(ImporterError, match=WF_NUMBER):
@@ -838,7 +838,7 @@ def test_refund_on_an_item_with_no_ship_date_and_an_old_order_date_is_skipped(tm
     assert any("4.25" in w and "111-0000000-0000009" in w for w in result.warnings)
 
 
-def test_coupon_with_unknown_targets_is_spread_as_a_discount_with_a_warning(tmp_path):
+def test_discount_with_unknown_targets_is_spread_as_a_discount_with_a_warning(tmp_path):
     # $3 over net 20 / 10 -> 2 / 1, written in the discount term
     order = _multi(27.00, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
                    promos=[{"name": "Coupon", "amount": 3.00, "positions": []}])
@@ -846,13 +846,13 @@ def test_coupon_with_unknown_targets_is_spread_as_a_discount_with_a_warning(tmp_
     assert rows["1"].amount_formula == "=20-2"
     assert rows["2"].amount_formula == "=10-1"
     assert result.warnings == [
-        "amazon order 111-0000000-0000009: coupon of 3.00 has no Items Amazon shows; "
+        "amazon order 111-0000000-0000009: discount of 3.00 has no Items Amazon shows; "
         "spread across every Item"]
     assert not result.skipped
 
 
-def test_coupon_with_unknown_targets_spreads_by_price_after_own_promos(tmp_path):
-    # $5 promo on #2 leaves net 10 / 5; the $3 coupon splits 2 / 1 after it
+def test_discount_with_unknown_targets_spreads_by_price_after_own_promos(tmp_path):
+    # $5 promo on #2 leaves net 10 / 5; the $3 untargeted discount splits 2 / 1 after it
     order = _multi(12.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0)),
                    promos=[{"name": "Save $5", "amount": 5.00, "positions": [2]},
                            {"name": "Coupon", "amount": 3.00, "positions": []}])
@@ -861,7 +861,7 @@ def test_coupon_with_unknown_targets_spreads_by_price_after_own_promos(tmp_path)
     assert rows["2"].amount_formula == "=10-5-1"
 
 
-def test_coupon_with_unknown_targets_sits_beside_a_whole_order_discount(tmp_path):
+def test_discount_with_unknown_targets_sits_beside_a_whole_order_discount(tmp_path):
     order = _multi(25.00, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
                    discounts=[{"name": "Order discount", "amount": 2.00}],
                    promos=[{"name": "Coupon", "amount": 3.00, "positions": []}])
@@ -870,7 +870,7 @@ def test_coupon_with_unknown_targets_sits_beside_a_whole_order_discount(tmp_path
     assert rows["2"].amount_formula == "=10-1.67"
 
 
-def test_coupon_with_unknown_targets_skips_cancelled_items(tmp_path):
+def test_discount_with_unknown_targets_skips_cancelled_items(tmp_path):
     order = _multi(8.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0, cancelled=True)),
                    promos=[{"name": "Coupon", "amount": 2.00, "positions": []}])
     _, rows = _rows(tmp_path, order)
@@ -886,7 +886,7 @@ def test_promo_whose_listed_items_were_all_cancelled_is_still_ignored(tmp_path):
     assert result.warnings == []
 
 
-def test_coupon_with_unknown_targets_that_breaks_the_total_still_skips_the_order(tmp_path):
+def test_discount_with_unknown_targets_that_breaks_the_total_still_skips_the_order(tmp_path):
     order = _multi(30.00, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
                    promos=[{"name": "Coupon", "amount": 3.00, "positions": []}])
     result, rows = _rows(tmp_path, order)
@@ -1015,9 +1015,9 @@ def test_the_scrape_prompt_example_parses_with_the_importer(tmp_path):
         "amazon 111-0000000-0000002"]
     assert sum(t.amount for t in refunds if t.refunds.endswith(("#2", "#3"))) == pytest.approx(-17.50)
 
-    # Order-level tax, a null ship date and a coupon with no targets.
+    # Order-level tax, a null ship date and a discount with unknown targets.
     assert rows["amazon 111-0000000-0000004 #1"].note_suffix == amazon.UNKNOWN_SHIP_DATE_NOTE
-    assert any("coupon of 1.48" in w for w in result.warnings)
+    assert any("discount of 1.48" in w for w in result.warnings)
     assert sum(t.amount for k, t in rows.items()
                if k.startswith("amazon 111-0000000-0000004 #")) == pytest.approx(26.18)
 

@@ -155,7 +155,7 @@ Each step is done when its check holds.
       "delivered": true,
       "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
       "order_total": 110.99,
-      "charges": [{"name": "Subtotal", "amount": 106.99},
+      "additions": [{"name": "Subtotal", "amount": 106.99},
                   {"name": "Driver tip", "amount": 7.00}],
       "discounts": [{"name": "Promotion applied", "amount": 3.00}]
     },
@@ -220,9 +220,9 @@ Tax goes where Amazon shows it, once: on the Item, or the shipment, or the Order
 **Whole Foods Order** (one row for the whole Order, no Items)
 - `order_date`: the date the Order was placed.
 - `delivered`: `true` once Amazon shows it delivered, else `false`.
-- `charges`: every summary line that adds to the total (for example Subtotal and Driver tip), each as `{"name": ..., "amount": ...}`, named and valued as Amazon shows it, including lines showing `0.00`.
+- `additions`: every summary line that adds to the total (for example Subtotal and Driver tip), each as `{"name": ..., "amount": ...}`, named and valued as Amazon shows it, including lines showing `0.00`.
 - `discounts`: every summary line that reduces the total, in the same form. `[]` if none.
-- Leave the Order Total line itself out of `charges` and `discounts`. Amazon's lines in `charges` minus `discounts` must reproduce `order_total`; if they do not, report it and copy what Amazon shows anyway.
+- Leave the Order Total line itself out of `additions` and `discounts`. Amazon's lines in `additions` minus `discounts` must reproduce `order_total`; if they do not, report it and copy what Amazon shows anyway.
 
 **Digital Order** (nothing to ship)
 - `charge_date`: the date Amazon charged it.

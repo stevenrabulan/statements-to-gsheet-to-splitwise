@@ -164,12 +164,12 @@ def _parse_whole_foods(order, order_number: str, order_date: date, config, accou
         result.skipped[f"before {cutoff.isoformat()}"] += 1
         return
 
-    charges = _lines(order, "charges", where)
-    if not charges:
-        raise ImporterError(f"amazon {where}: 'charges' must list at least one line")
+    additions = _lines(order, "additions", where)
+    if not additions:
+        raise ImporterError(f"amazon {where}: 'additions' must list at least one line")
     discounts = _lines(order, "discounts", where)
     expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
-    calculated = sum(charges, Decimal(0)) - sum(discounts, Decimal(0))
+    calculated = sum(additions, Decimal(0)) - sum(discounts, Decimal(0))
     if calculated != expected:
         result.skipped["total mismatch"] += 1
         result.warnings.append(
@@ -181,7 +181,7 @@ def _parse_whole_foods(order, order_number: str, order_date: date, config, accou
                                        where, config, accounts)
     if warning:
         result.warnings.append(warning)
-    formula = "+".join(_dollars(a) for a in charges) + "".join(f"-{_dollars(a)}" for a in discounts)
+    formula = "+".join(_dollars(a) for a in additions) + "".join(f"-{_dollars(a)}" for a in discounts)
     result.transactions.append(Transaction(
         date=order_date,
         description=WHOLE_FOODS_LABEL,
@@ -431,9 +431,9 @@ class _ItemCost:
 
 def _loaded_costs(order, shipments, where, notices: list[str]) -> list[_ItemCost]:
     """Loaded Cost for every non-cancelled Item, in the spec's order: Promos,
-    then tax, then shipping and whole-Order discounts. A Promo with no known
-    targets is an Adjustment (CONTEXT.md): it joins the discounts, and `notices`
-    gets a warning for it."""
+    then tax, then shipping and whole-Order discounts. A discount whose targets
+    Amazon doesn't show is an Adjustment, not a Promo (CONTEXT.md): it joins the
+    discounts, and `notices` gets a warning for it."""
     groups = []     # [(shipment, [_ItemCost])], so shipment-scope spreads know their Items
     for shipment in shipments:
         live = _live_items(shipment, where)
@@ -442,14 +442,14 @@ def _loaded_costs(order, shipments, where, notices: list[str]) -> list[_ItemCost
         groups.append((shipment, costs))
     costs = [c for _, group in groups for c in group]
 
-    untargeted = []     # amounts of coupons whose Items Amazon doesn't show
+    untargeted = []     # amounts of discounts whose Items Amazon doesn't show
     for promo in _get(order, "promos", list, where):
         positions = _get(promo, "positions", list, where)
         amount = _money(_get(promo, "amount", (int, Decimal), where), f"{where} promo")
         if not positions:
             if costs:
                 untargeted.append(amount)
-                notices.append(f"amazon {where}: coupon of {amount:.2f} has no Items Amazon "
+                notices.append(f"amazon {where}: discount of {amount:.2f} has no Items Amazon "
                                f"shows; spread across every Item")
             continue
         targets = [c for c in costs if c.position in positions]

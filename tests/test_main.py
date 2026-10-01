@@ -471,8 +471,8 @@ def test_unknown_ship_date_row_notes_say_so_and_a_rescrape_writes_nothing(amazon
     wr.assert_not_called()
 
 
-def test_untargeted_coupon_is_written_in_the_discount_term_and_warned(amazon_month, tmp_path, capsys):
-    # Fixture Item: 12.99 + 1.08 tax = 14.07; a $2 coupon with no targets lowers the total.
+def test_discount_with_unknown_targets_is_written_in_the_discount_term_and_warned(amazon_month, tmp_path, capsys):
+    # Fixture Item: 12.99 + 1.08 tax = 14.07; a $2 discount with unknown targets lowers the total.
     src = json.loads(AMAZON_FIXTURE.read_text())
     order = src["orders"][0]
     order["promos"] = [{"name": "Coupon", "amount": 2.00, "positions": []}]
@@ -550,7 +550,7 @@ def _whole_foods_file(month, order_date="2026-09-11", refunds=()):
             "order_date": order_date, "delivered": True,
             "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
             "order_total": 113.99,
-            "charges": [{"name": "Subtotal", "amount": 106.99},
+            "additions": [{"name": "Subtotal", "amount": 106.99},
                         {"name": "Driver tip", "amount": 7.00}],
             "discounts": [],
         }],

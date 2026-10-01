@@ -186,7 +186,7 @@ The summary counts what the import left out:
 - `unknown ship date`: see above.
 - `refund before <Cutoff Date>`, `refund without item`, `refund on Digital Order`: a Refund left out, with a warning naming the Order and amount. Enter it by hand.
 
-Warnings to expect: a coupon Amazon shows with no Items it applies to is spread across every Item as a discount (a warning names the Order and amount); a card that matches no `accounts.json` key falls back to the Amazon entry's name.
+Warnings to expect: a discount Amazon shows with no Items it applies to is spread across every Item as a discount (a warning names the Order and amount); a card that matches no `accounts.json` key falls back to the Amazon entry's name.
 
 #### Keys and Refunds
 

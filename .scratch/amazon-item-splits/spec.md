@@ -35,7 +35,7 @@ Amazon spending is recorded as **one sheet row per Item**, with its Loaded Cost 
 10. As Steven, I want a single-Item shipment to take its shipment's tax exactly, so that the common case has no estimation at all.
 11. As Steven, I want shipping spread across Items in proportion to their price after Promos, so that shipping is shared fairly.
 12. As Steven, I want a discount on the whole Order treated like shipping (spread across all Items in proportion to price), so that Order-wide savings benefit every Item.
-13. As Steven, I want each Order's Item costs to add up exactly to the Order total, with the leftover cent assigned to the largest part, so that nothing is lost or invented by rounding.
+13. As Steven, I want each Order's Item costs to add up exactly to the Order total, with any leftover cents assigned to the parts that lost the most in rounding, so that nothing is lost or invented by rounding.
 14. As Steven, I want an Order whose calculated costs don't match Amazon's Order total to be skipped with a warning, so that a bad scrape never writes wrong numbers.
 15. As Steven, I want how an Order was paid (gift card, points, card) to have no effect on Loaded Cost, so that shared costs reflect the true price.
 16. As Steven, I want the Payment Method column set from the card on the Order, matched by its last four digits to my accounts config, so that rows say "Amazon Card" like everything else.
@@ -176,7 +176,7 @@ Amazon spending is recorded as **one sheet row per Item**, with its Loaded Cost 
 - a multi-Item shipment with shipment tax spread across Items
 - a Promo targeting one Item, and a Promo targeting several Items
 - shipping and a whole-Order discount spread across Items
-- a rounding remainder assigned to the largest part
+- a rounding remainder assigned to the parts that lost the most in rounding (on a tie, the largest part)
 - a mismatch with the Order total, so the Order is skipped with a warning
 - an Order that isn't ready
 - a cancelled Item
@@ -226,10 +226,10 @@ The first real scrape (60 Orders, 2 Refunds) showed gaps between what Amazon dis
 3. **Unknown ship date.** When a shipped shipment's ship date is `null`, the Order Date stands in for the cutoff comparison only. If the Order Date is on or after the Cutoff Date, the Items are imported. If it is before, the Items in that shipment are skipped with the reason "unknown ship date" and a warning for each Item. Items in the Order's other shipments are judged by their own ship date. Each imported row that used the fallback gets a warning in the run output and a Notes suffix after its key: ` (ship date unknown, Order Date used for cutoff)`. Column A is the Order Date either way.
 4. **Coupon with unknown targets.** A Promo with `positions: []` is treated as an Adjustment: spread across all Items in proportion to price after Promos, written in the formula's discount term, with a warning naming the Order and amount.
 5. **Order Total.** The total before any gift card or points are applied (the line above "Gift Card Amount"), not the "Grand Total" after it.
-6. **Refund covering several Items.** A Refund lists `positions`. The importer writes one negative row per Item, splitting the amount in proportion to the Items' Loaded Costs (leftover cent to the largest part). Each row copies its own Item's classification and has its own key.
+6. **Refund covering several Items.** A Refund lists `positions`. The importer writes one negative row per Item, splitting the amount in proportion to the Items' Loaded Costs (leftover cents to the parts that lost the most in rounding, as in Implementation step 6). A part that rounds to zero gets no row. Each row copies its own Item's classification and has its own key.
 7. **Whole Foods Orders.** One row per Order, not per Item. Description `Whole Foods`, date is the Order Date, Amount is a formula of the summary lines Amazon shows (e.g. `=106.99+7` for subtotal plus driver tip) and must equal the Order Total, otherwise the Order is skipped with the "total mismatch" warning. Key `amazon <order number>` (no position). Imported once delivered. Cutoff compared with the Order Date. Defaults to Shared. Payment Method as for Items.
 8. **Whole Foods Refunds.** A Refund with `positions: []` on a Whole Foods Order becomes one negative row, `Refund: Whole Foods`, key `amazon <order number> refund <refund date> <amount>`, copying the Order row's "Send to Splitwise" and "For who".
-9. **Digital Orders.** The scrape reads the Digital Orders tab. One row per Digital Order: description is what was bought (e.g. `Grocery Subscription`), date is the charge date, Amount is the amount shown, key `amazon <order number>` (e.g. `amazon D01-...`), Payment Method from the card on its details page, cutoff compared with the charge date, defaults to Shared.
+9. **Digital Orders.** The scrape reads the Digital Orders tab. One row per Digital Order: description is what was bought (e.g. `Grocery Subscription`), date is the charge date, Amount is the amount shown, key `amazon <order number>` (e.g. `amazon D01-...`), Payment Method from the card on its details page, cutoff compared with the charge date, defaults to Shared. A Refund on a Digital Order is not imported: the scrape leaves it out of the file and lists it in its report, and if one is in the file anyway the importer skips it with the reason "refund on Digital Order" and a warning that names the Order and amount, so Steven enters it by hand.
 10. **The Amazon card is no longer imported.** The card-import filter stays as a safety net. The Prime fee (yearly, no charge history shown) and Audible (separate sign-in) are entered by hand.
 11. **Scrape scope.** Only Steven's own account, never another account's Orders. Whole Foods Orders are found by walking the 90-day Orders list, not the search box.
 12. **Schema version 2.** The importer accepts only version 2, so a file from the old prompt fails with the existing version error.
@@ -261,7 +261,7 @@ The first real scrape (60 Orders, 2 Refunds) showed gaps between what Amazon dis
       "delivered": true,
       "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
       "order_total": 113.99,
-      "charges": [{"name": "Subtotal", "amount": 106.99}, {"name": "Driver tip", "amount": 7.00}],
+      "additions": [{"name": "Subtotal", "amount": 106.99}, {"name": "Driver tip", "amount": 7.00}],
       "discounts": []
     },
     {
@@ -284,7 +284,7 @@ The first real scrape (60 Orders, 2 Refunds) showed gaps between what Amazon dis
 - `tax` on a physical Order is the Order-level tax, or `null` when Amazon shows tax per shipment. A shipment's `tax` may now be `null`. If both are `null`, the Order's tax is taken as 0 and the total check decides.
 - A shipped shipment's `ship_date` may be `null`.
 - `positions` replaces `position` on a Refund. It is `[]` only for a Whole Foods Order.
-- Whole Foods `charges` are the summary lines Amazon shows that add to the total, and `discounts` the lines that reduce it. The Order Total line itself is not listed in either.
+- Whole Foods `additions` are the summary lines Amazon shows that add to the total, and `discounts` the lines that reduce it. The Order Total line itself is not listed in either.
 
 ### Changes to earlier sections
 
