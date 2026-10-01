@@ -13,7 +13,13 @@ from pathlib import Path
 from models import AccountConfig, ImporterError, ParseResult, Transaction
 
 NAME = "amazon"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Every Order says what it is. Only physical Orders are imported so far; the
+# other kinds are counted as skipped under their CONTEXT.md names.
+_PHYSICAL = "physical"
+_NOT_IMPORTED_YET = {"whole_foods": "Whole Foods Order", "digital": "Digital Order"}
+_KINDS = {_PHYSICAL, *_NOT_IMPORTED_YET}
 
 GIFT_CARD_LABEL = "Amazon Gift Card"
 POINTS_LABEL = "Points"
@@ -80,6 +86,13 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         raise ImporterError(f"amazon: each order must be an object, got {order!r}")
     order_number = _get(order, "order_number", str, "order")
     where = f"order {order_number}"
+    kind = order.get("kind")
+    if not isinstance(kind, str) or kind not in _KINDS:
+        raise ImporterError(
+            f"amazon {where}: 'kind' must be one of {sorted(_KINDS)}, got {kind!r}")
+    if kind in _NOT_IMPORTED_YET:
+        result.skipped[f"{_NOT_IMPORTED_YET[kind]} (not imported yet)"] += 1
+        return
     order_date = _date(_get(order, "order_date", str, where), where)
     shipments = _get(order, "shipments", list, where)
 
@@ -127,6 +140,12 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
     what = f"Refund of {amount:.2f} on {refund_date.isoformat()}"
 
     order = orders.get(order_number)
+    if order is not None and order["kind"] in _NOT_IMPORTED_YET:
+        label = _NOT_IMPORTED_YET[order["kind"]]
+        result.skipped[f"refund on {label} (not imported yet)"] += 1
+        result.warnings.append(f"amazon {where}: {what} is on a {label}, which is not "
+                               f"imported yet; Refund skipped")
+        return
     found = _shipped_item(order, position, where) if order else None
     if found is None:
         result.skipped["refund without item"] += 1
@@ -231,16 +250,22 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
         for cost, part in zip(targets, _spread(amount, [c.line for c in targets])):
             cost.promo += part
 
+    # Tax at the smallest scope Amazon shows: the Item's own, then its shipment's,
+    # then the Order's. A wider figure already includes the narrower ones.
+    untaxed = []    # Items whose tax Amazon shows only for the whole Order, if at all
     for shipment, group in groups:
-        # Shipment tax already includes any per-Item tax Amazon also shows.
         rest = [c for c in group if c.own_tax is None]
         for cost in group:
             if cost.own_tax is not None:
                 cost.tax = cost.own_tax
-        tax = _money(_get(shipment, "tax", (int, Decimal), where), f"{where} shipment tax")
-        remainder = max(tax - sum((c.tax for c in group), Decimal(0)), Decimal(0))
-        for cost, part in zip(rest, _spread(remainder, [c.net for c in rest])):
-            cost.tax = part
+        tax = _shown_tax(shipment, f"{where} shipment")
+        if tax is None:
+            untaxed += rest
+        else:
+            _spread_rest_of_tax(tax, group, rest)
+    tax = _shown_tax(order, where)
+    if tax is not None:
+        _spread_rest_of_tax(tax, costs, untaxed)
 
     # Shipping at the smallest scope Amazon shows: per shipment when given, plus
     # whatever is left at Order scope.
@@ -258,6 +283,22 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
         for cost, part in zip(costs, _spread(amount, [c.net for c in costs])):
             cost.discount += part
     return costs
+
+
+def _shown_tax(obj, where: str) -> Decimal | None:
+    """The tax Amazon shows at this scope, or None when it shows none there.
+    The scraper must still write the field, as null."""
+    if "tax" not in obj:
+        raise ImporterError(f"amazon {where}: missing 'tax' (null when Amazon shows none)")
+    return None if obj["tax"] is None else _money(obj["tax"], f"{where} tax")
+
+
+def _spread_rest_of_tax(tax: Decimal, covered: list[_ItemCost], rest: list[_ItemCost]) -> None:
+    """`tax` is Amazon's figure for all of `covered`. What the tax already on
+    those Items leaves of it is spread across `rest` by price after Promos."""
+    remainder = max(tax - sum((c.tax for c in covered), Decimal(0)), Decimal(0))
+    for cost, part in zip(rest, _spread(remainder, [c.net for c in rest])):
+        cost.tax = part
 
 
 def _cancelled(item, where: str) -> bool:

@@ -1,13 +1,15 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "scraped_on": "2026-09-28",
   "orders": [
     {
+      "kind": "physical",
       "order_number": "111-0000000-0000001",
       "order_date": "2026-08-03",
       "status": "Delivered",
       "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
       "order_total": 14.07,
+      "tax": null,
       "shipping": 0,
       "discounts": [],
       "promos": [],

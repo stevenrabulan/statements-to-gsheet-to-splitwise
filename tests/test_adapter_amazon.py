@@ -42,10 +42,11 @@ def _order(**overrides):
     }
     item.update(overrides.pop("item", {}))
     order = {
+        "kind": "physical",
         "order_number": "111-0000000-0000009", "order_date": "2026-08-10",
         "status": "Delivered",
         "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
-        "order_total": 10.83, "shipping": 0, "discounts": [], "promos": [],
+        "order_total": 10.83, "tax": None, "shipping": 0, "discounts": [], "promos": [],
         "shipments": [{"shipped": True, "ship_date": "2026-08-11", "tax": 0.83,
                        "shipping": None, "items": [item]}],
     }
@@ -53,7 +54,7 @@ def _order(**overrides):
     return order
 
 
-def _write(tmp_path, *orders, schema_version=1, refunds=()):
+def _write(tmp_path, *orders, schema_version=2, refunds=()):
     f = tmp_path / "amazon-orders-2026-09-28.json"
     f.write_text(json.dumps({"schema_version": schema_version, "scraped_on": "2026-09-28",
                              "orders": list(orders), "refunds": list(refunds)}))
@@ -102,9 +103,23 @@ def test_unmatched_card_falls_back_to_amazon_name_with_warning(tmp_path):
     assert "9999" in result.warnings[0]
 
 
-def test_wrong_schema_version_fails_loudly(tmp_path):
-    with pytest.raises(ImporterError, match="schema_version"):
-        _parse(_write(tmp_path, _order(), schema_version=2))
+@pytest.mark.parametrize("version", [1, 3, None])
+def test_only_schema_version_2_is_accepted(tmp_path, version):
+    with pytest.raises(ImporterError, match="schema_version.*expected 2"):
+        _parse(_write(tmp_path, _order(), schema_version=version))
+
+
+def test_missing_kind_names_the_order(tmp_path):
+    order = _order()
+    del order["kind"]
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*kind"):
+        _parse(_write(tmp_path, order))
+
+
+@pytest.mark.parametrize("kind", ["grocery", "", 7, None])
+def test_unknown_kind_names_the_order(tmp_path, kind):
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*kind"):
+        _parse(_write(tmp_path, _order(kind=kind)))
 
 
 def test_missing_field_names_the_order(tmp_path):
@@ -245,6 +260,134 @@ def test_gift_card_payment_does_not_change_the_math(tmp_path):
     result, rows = _rows(tmp_path, order)
     assert rows["1"].amount_formula == "=30+0.75"
     assert result.skipped["total mismatch"] == 0
+
+
+@pytest.mark.parametrize("kind, reason", [
+    ("whole_foods", "Whole Foods Order (not imported yet)"),
+    ("digital", "Digital Order (not imported yet)"),
+])
+def test_kinds_not_imported_yet_are_skipped_and_counted(tmp_path, kind, reason):
+    other = {"kind": kind, "order_number": "111-0000000-0000050", "order_total": 9.99}
+    result = _parse(_write(tmp_path, _order(), other))
+    assert [t.key for t in result.transactions] == ["amazon 111-0000000-0000009 #1"]
+    assert result.skipped[reason] == 1
+
+
+def test_refund_on_a_kind_not_imported_yet_is_skipped_with_a_warning(tmp_path):
+    other = {"kind": "whole_foods", "order_number": "111-0000000-0000050", "order_total": 9.99}
+    result = _parse(_write(tmp_path, other,
+                           refunds=[_refund(4.99, order_number="111-0000000-0000050")]))
+    assert result.transactions == []
+    assert result.skipped["refund on Whole Foods Order (not imported yet)"] == 1
+    [warning] = result.warnings
+    assert "111-0000000-0000050" in warning and "4.99" in warning
+    assert "Whole Foods Order" in warning
+
+
+# --- Order-level tax (schema version 2) -----------------------------------------
+
+def test_order_level_tax_is_spread_across_every_shipment_by_net_price(tmp_path):
+    # tax 1.00 over 30.00 / 10.00 in two shipments -> 0.75 / 0.25
+    order = _multi(41.00, _shipment(_item(1, 30.00), tax=None),
+                   _shipment(_item(2, 10.00), tax=None), tax=1.00)
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=30+0.75"
+    assert rows["2"].amount_formula == "=10+0.25"
+    assert result.warnings == []
+
+
+def test_order_level_tax_leftover_cent_goes_to_the_largest_part(tmp_path):
+    # $1.00 over three equal Items: 0.33 each, leftover cent to the first largest
+    order = _multi(31.00, _shipment(_item(1, 10.00), _item(2, 10.00), tax=None),
+                   _shipment(_item(3, 10.00), tax=None), tax=1.00)
+    _, rows = _rows(tmp_path, order)
+    assert [rows[k].amount_formula for k in "123"] == ["=10+0.34", "=10+0.33", "=10+0.33"]
+
+
+def test_order_level_tax_weights_are_price_after_promos_without_shipping(tmp_path):
+    # net 10 and 5 after a $5 promo on #2 -> tax 0.30 splits 0.20 / 0.10
+    order = _multi(19.30, _shipment(_item(1, 10.00), tax=None, shipping=4.00),
+                   _shipment(_item(2, 10.00), tax=None), tax=0.30,
+                   promos=[{"name": "Save $5", "amount": 5.00, "positions": [2]}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.2+4"
+    assert rows["2"].amount_formula == "=10-5+0.1"
+
+
+def test_own_tax_wins_and_order_level_tax_remainder_goes_to_the_rest(tmp_path):
+    # Order tax 2.00 includes #1's own 0.50; the other 1.50 splits 1.00 / 0.50
+    order = _multi(42.00, _shipment(_item(1, 10.00, tax=0.50), _item(2, 20.00), tax=None),
+                   _shipment(_item(3, 10.00), tax=None), tax=2.00)
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.5"
+    assert rows["2"].amount_formula == "=20+1"
+    assert rows["3"].amount_formula == "=10+0.5"
+
+
+def test_shipment_tax_wins_over_order_level_tax(tmp_path):
+    # Shipment 1 shows its own 0.40; the Order's 1.00 leaves 0.60 for shipment 2
+    order = _multi(21.00, _shipment(_item(1, 10.00), tax=0.40),
+                   _shipment(_item(2, 10.00), tax=None), tax=1.00)
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.4"
+    assert rows["2"].amount_formula == "=10+0.6"
+
+
+def test_order_level_tax_is_ignored_when_every_shipment_shows_tax(tmp_path):
+    order = _multi(20.80, _shipment(_item(1, 10.00), tax=0.40),
+                   _shipment(_item(2, 10.00), tax=0.40), tax=0.80)
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.4"
+    assert rows["2"].amount_formula == "=10+0.4"
+    assert result.warnings == []
+
+
+def test_cancelled_item_takes_no_order_level_tax(tmp_path):
+    order = _multi(21.00, _shipment(_item(1, 20.00), tax=None),
+                   _shipment(_item(2, 50.00, cancelled=True), tax=None), tax=1.00)
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+    assert rows["1"].amount_formula == "=20+1"
+    assert result.warnings == []
+
+
+def test_no_tax_shown_anywhere_means_zero_tax(tmp_path):
+    order = _multi(20.00, _shipment(_item(1, 10.00), tax=None),
+                   _shipment(_item(2, 10.00), tax=None), tax=None)
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10"
+    assert rows["2"].amount_formula == "=10"
+    assert result.warnings == []
+
+
+def test_no_tax_shown_anywhere_leaves_the_total_check_to_decide(tmp_path):
+    order = _multi(21.65, _shipment(_item(1, 10.00), tax=None),
+                   _shipment(_item(2, 10.00), tax=None), tax=None)
+    result = _parse(_write(tmp_path, order))
+    assert result.transactions == []
+    assert result.skipped["total mismatch"] == 2
+    assert "21.65" in result.warnings[0] and "20.00" in result.warnings[0]
+
+
+def test_order_without_a_tax_field_fails_loudly(tmp_path):
+    order = _multi(10.83, _shipment(_item(1, 10.00), tax=0.83))
+    del order["tax"]
+    with pytest.raises(ImporterError, match="111-0000000-0000009: missing 'tax'"):
+        _parse(_write(tmp_path, order))
+
+
+def test_shipment_without_a_tax_field_fails_loudly(tmp_path):
+    order = _multi(10.83, _shipment(_item(1, 10.00)), tax=0.83)
+    del order["shipments"][0]["tax"]
+    with pytest.raises(ImporterError, match="111-0000000-0000009 shipment: missing 'tax'"):
+        _parse(_write(tmp_path, order))
+
+
+@pytest.mark.parametrize("tax", ["1.00", True, 1.005])
+def test_bad_order_level_tax_names_the_order(tmp_path, tax):
+    order = _multi(11.00, _shipment(_item(1, 10.00), tax=None), tax=tax)
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*tax"):
+        _parse(_write(tmp_path, order))
 
 
 # --- readiness, cancelled Items, ship-date cutoff -------------------------------
