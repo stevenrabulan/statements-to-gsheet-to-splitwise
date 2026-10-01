@@ -123,13 +123,10 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         for cost in costs:
             _count_before_cutoff(cost, cutoff, where, result)
         return
-    expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
-    calculated = sum((c.loaded for c in costs), Decimal(0))
-    if calculated != expected:
+    mismatch = _total_mismatch(order, costs, where)
+    if mismatch:
         result.skipped["total mismatch"] += len(costs)
-        result.warnings.append(
-            f"amazon {where}: expected total {expected:.2f} but calculated {calculated:.2f}; "
-            f"Order skipped")
+        result.warnings.append(f"amazon {where}: {mismatch}; Order skipped")
         return
 
     result.warnings += notices
@@ -218,6 +215,16 @@ def _parse_digital(order, order_number: str, config, accounts, result: ParseResu
     ))
 
 
+def _total_mismatch(order, costs: list["_ItemCost"], where: str) -> str | None:
+    """How the Loaded Costs fail the total check (ADR 0002), or None when they
+    sum exactly to the Order Total."""
+    expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
+    calculated = sum((c.loaded for c in costs), Decimal(0))
+    if calculated == expected:
+        return None
+    return f"expected total {expected:.2f} but calculated {calculated:.2f}"
+
+
 def _lines(order, field: str, where: str) -> list[Decimal]:
     """The dollar amounts of the summary lines Amazon shows under `field`."""
     return [_money(_get(line, "amount", (int, Decimal), f"{where} {field}"), f"{where} {field}")
@@ -289,11 +296,17 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
                                    f"{cutoff.isoformat()} cutoff; Refund skipped, enter it by hand")
             return
 
-    account, warning = _payment_method(_get(order, "payment", list, f"order {order_number}"),
-                                       f"order {order_number}", config, accounts)
+    parts, mismatch = _refund_parts(order, positions, amount, order_where)
+    if mismatch:
+        result.skipped["refund on total mismatch"] += 1
+        result.warnings.append(f"amazon {where}: {what} cannot be split between its Items: "
+                               f"the Order fails the total check ({mismatch}); "
+                               f"Refund skipped, enter it by hand")
+        return
+    account, warning = _payment_method(_get(order, "payment", list, order_where),
+                                       order_where, config, accounts)
     if warning and warning not in result.warnings:
         result.warnings.append(warning)
-    parts = _refund_parts(order, positions, amount, where)
     for position, (short_name, _, _), part in zip(positions, found, parts):
         if not part:
             continue    # a share too small to be a cent is not a row
@@ -352,14 +365,21 @@ def _refund_amount_and_date(refund, where: str) -> tuple[Decimal, date]:
     return amount, _date(_get(refund, "refund_date", str, f"{where} refund"), f"{where} refund")
 
 
-def _refund_parts(order, positions: list[int], amount: Decimal, where: str) -> list[Decimal]:
+def _refund_parts(order, positions: list[int], amount: Decimal,
+                  where: str) -> tuple[list[Decimal], str | None]:
     """Split a Refund across its Items in proportion to their Loaded Costs, so
-    each part follows its own Item. The parts sum exactly to `amount`."""
+    each part follows its own Item. The parts sum exactly to `amount`. Returns
+    (parts, None), or ([], how the total check failed): Loaded Costs that fail
+    it are never used (ADR 0002). One Item needs no split, so no check."""
     if len(positions) == 1:
-        return [amount]
-    cost_of = {c.position: c.loaded
-               for c in _loaded_costs(order, _get(order, "shipments", list, where), where, [])}
-    return _spread(amount, [cost_of[p] for p in positions])
+        return [amount], None
+    # The Order's own parse reports these notices; here they would only repeat.
+    costs = _loaded_costs(order, _get(order, "shipments", list, where), where, notices=[])
+    mismatch = _total_mismatch(order, costs, where)
+    if mismatch:
+        return [], mismatch
+    cost_of = {c.position: c.loaded for c in costs}
+    return _spread(amount, [cost_of[p] for p in positions]), None
 
 
 def _shipped_items(order, positions: list[int], where: str) -> list[tuple[str, date, bool]] | None:

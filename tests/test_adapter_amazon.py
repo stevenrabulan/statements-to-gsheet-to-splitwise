@@ -900,6 +900,28 @@ def _two_item_order(price_1=30.00, price_2=10.00, ship_2="2026-08-11"):
                   _shipment_on(ship_2, _item(2, price_2, tax=0)))
 
 
+def test_refund_covering_several_items_on_an_order_failing_the_total_check_is_skipped(tmp_path):
+    # ADR 0002: Loaded Costs that fail the total check are never used, so there is no split.
+    order = _two_item_order()
+    order["order_total"] = 99.99
+    result = _parse(_write(tmp_path, order, refunds=[_refund(20.00, positions=[1, 2])]))
+    assert result.transactions == []
+    assert result.skipped["refund on total mismatch"] == 1
+    [refund_warning] = [w for w in result.warnings if "Refund" in w]
+    assert "111-0000000-0000009 #1, #2" in refund_warning
+    assert "20.00" in refund_warning and "99.99" in refund_warning
+    assert "enter it by hand" in refund_warning
+
+
+def test_refund_on_one_item_needs_no_split_so_a_failed_total_check_does_not_skip_it(tmp_path):
+    order = _two_item_order()
+    order["order_total"] = 99.99
+    result = _parse(_write(tmp_path, order, refunds=[_refund(5.00, positions=[2])]))
+    [refund] = _refund_rows(result)
+    assert refund.amount == -5.00
+    assert result.skipped["refund on total mismatch"] == 0
+
+
 def test_refund_covering_several_items_splits_by_loaded_cost(tmp_path):
     result = _parse(_write(tmp_path, _two_item_order(),
                            refunds=[_refund(20.00, positions=[1, 2])]))
