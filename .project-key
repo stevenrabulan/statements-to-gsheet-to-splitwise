@@ -1,0 +1,17 @@
+# Project key
+#
+# A short identifier (3-5 uppercase letters) for this project.
+#
+# What it is: a compact label for the project, like the "project key" in
+# Jira (e.g. PROJ-123) or the "team key" / identifier in Linear (e.g. ENG-42).
+# Other tools call it a prefix or a short code.
+#
+# How it is used: agents read this file to work out which project a session
+# belongs to. For example, a session that implements ticket 6 here gets named
+# "SPLT 6: Amazon Item Splits", so it is easy to spot in a list of sessions
+# sorted by date instead of by project.
+#
+# Format: the first line that is not blank and does not start with "#" is the
+# key. Keep it to one key.
+
+SPLT
