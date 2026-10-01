@@ -5,6 +5,7 @@ happens here, in Decimal, and each row's Amount is written as a formula.
 """
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_FLOOR, Decimal
@@ -13,7 +14,7 @@ from pathlib import Path
 from models import AccountConfig, ImporterError, ParseResult, Transaction
 
 NAME = "amazon"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Every Order says what it is.
 _PHYSICAL = "physical"
@@ -29,12 +30,15 @@ _PAYMENT_TYPES = {"card", "gift_card", "points"}
 CENT = Decimal("0.01")
 
 # Every Amazon row's Notes carry a stable key (spec, "Deduplication"):
-# "amazon <order number> #<position>" for an Item, "amazon <order number>" for a
+# "amazon <order number> <ASIN>" for an Item, "amazon <order number>" for a
 # Whole Foods or Digital Order, plus " refund <date> <amount>" on a Refund (the amount of
-# that Item's part when one Refund covers several Items).
-# Matched as whole words, longest form first, so "#1" never matches "#10" and an
-# Order key never matches an Item key or a Refund key that starts with it.
-_ROW_KEY = r"amazon \S+(?: #\d+)?"
+# that Item's part when one Refund covers several Items). The ASIN, not the
+# Item's position, because Amazon reorders an Order's Items between page loads
+# (ticket 17). An ASIN on a second line of the same Order is "<ASIN>#2".
+# Matched as whole words, longest form first, so an ASIN never matches its "#2"
+# and an Order key never matches an Item key or a Refund key that starts with it.
+_ASIN = r"[A-Z0-9]{10}"
+_ROW_KEY = rf"amazon \S+(?: {_ASIN}(?:#\d+)?)?"
 KEY_PATTERN = re.compile(rf"(?<!\S){_ROW_KEY}(?: refund \S+ \S+)?(?!\S)")
 # Fullmatched against a KEY_PATTERN match: the key of a row that Refunds point
 # at (an Item or a Whole Foods Order), not a Refund's own key.
@@ -45,8 +49,10 @@ UNKNOWN_SHIP_DATE_NOTE = " (ship date unknown, Order Date used for cutoff)"
 UNKNOWN_SHIP_DATE = "unknown ship date"
 
 
-def item_key(order_number: str, position: int) -> str:
-    return f"amazon {order_number} #{position}"
+def item_key(order_number: str, asin: str, occurrence: int = 1) -> str:
+    """`occurrence` counts the Order's lines with this ASIN, from 1."""
+    suffix = "" if occurrence == 1 else f"#{occurrence}"
+    return f"amazon {order_number} {asin}{suffix}"
 
 
 def order_key(order_number: str) -> str:
@@ -111,6 +117,7 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         return
     shipments = _get(order, "shipments", list, where)
     _check_positions(shipments, where)
+    keys = _item_keys(order, where)
 
     if not _ready(shipments, where):
         result.skipped["not ready"] += sum(len(_live_items(sh, where)) for sh in shipments)
@@ -143,7 +150,7 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
             result.warnings.append(
                 f"amazon {where}: ship date unknown for #{cost.position}; Order Date "
                 f"{order_date.isoformat()} used for the cutoff")
-        result.transactions.append(_item_row(cost, order_number, order_date, account))
+        result.transactions.append(_item_row(cost, keys[cost.position], order_date, account))
 
 
 def _parse_whole_foods(order, order_number: str, order_date: date, config, accounts,
@@ -308,10 +315,11 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
                                        order_where, config, accounts)
     if warning and warning not in result.warnings:
         result.warnings.append(warning)
+    keys = _item_keys(order, order_where)
     for position, (short_name, _, _), part in zip(positions, found, parts):
         if not part:
             continue    # a share too small to be a cent is not a row
-        item = item_key(order_number, position)
+        item = keys[position]
         result.transactions.append(Transaction(
             date=refund_date,
             description=f"Refund: {short_name}",
@@ -413,6 +421,28 @@ def _ship_date(shipment, order, where: str) -> tuple[date, bool]:
     return _date(_get(shipment, "ship_date", str, where), where), True
 
 
+def _item_keys(order, where: str) -> dict[int, str]:
+    """The key of every non-cancelled Item of a physical Order, by position.
+    Positions only tie the file together (a Refund or Promo to its Items); the
+    key is the ASIN. Lines sharing an ASIN are numbered in the file's order."""
+    keys, seen = {}, Counter()
+    for shipment in _get(order, "shipments", list, where):
+        for item in _live_items(shipment, where):
+            position = _get(item, "position", int, where)
+            asin = _asin(item, f"{where} #{position}")
+            seen[asin] += 1
+            keys[position] = item_key(order["order_number"], asin, seen[asin])
+    return keys
+
+
+def _asin(item, where: str) -> str:
+    asin = item.get("asin")
+    if not isinstance(asin, str) or not re.fullmatch(_ASIN, asin):
+        raise ImporterError(f"amazon {where}: 'asin' must be 10 capital letters or digits, "
+                            f"got {asin!r}")
+    return asin
+
+
 def _live_items(shipment, where: str) -> list:
     """The shipment's Items that were not cancelled."""
     return [item for item in _get(shipment, "items", list, where)
@@ -421,8 +451,8 @@ def _live_items(shipment, where: str) -> list:
 
 def _check_positions(shipments, where: str) -> None:
     """Every non-cancelled Item's position is a whole number from 1, used once
-    in the Order. The position is the Item's key, so a repeat would let one row
-    hide another."""
+    in the Order. Refunds and Promos name their Items by position, so a repeat
+    would point them at two Items."""
     seen = set()
     for shipment in shipments:
         for item in _live_items(shipment, where):
@@ -594,7 +624,7 @@ def _spread(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
     return parts
 
 
-def _item_row(cost: _ItemCost, order_number: str, order_date: date, account: str) -> Transaction:
+def _item_row(cost: _ItemCost, key: str, order_date: date, account: str) -> Transaction:
     formula = _dollars(cost.unit_price)
     if cost.quantity != 1:
         formula = f"{cost.quantity}*{formula}"
@@ -609,7 +639,7 @@ def _item_row(cost: _ItemCost, order_number: str, order_date: date, account: str
         amount=float(cost.loaded),
         account=account,
         amount_formula=f"={formula}",
-        key=item_key(order_number, cost.position),
+        key=key,
         note_suffix="" if cost.ship_date_known else UNKNOWN_SHIP_DATE_NOTE,
     )
 

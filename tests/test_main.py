@@ -212,7 +212,7 @@ AMAZON_ACCOUNTS = {
     "Chase4242": AccountConfig("Amazon Card"),
     "amazon-orders": AccountConfig("Amazon", date(2026, 7, 29)),
 }
-AMAZON_NOTE = "split-transactions automation amazon 111-0000000-0000001 #1"
+AMAZON_NOTE = "split-transactions automation amazon 111-0000000-0000001 B0FAKE0001"
 
 
 @pytest.fixture
@@ -259,9 +259,9 @@ def test_rescrape_of_imported_item_writes_nothing_even_if_amount_moved(amazon_mo
 
 
 def test_amazon_key_match_is_exact_not_a_prefix(amazon_month, tmp_path):
-    # Item #10's key contains "#1" as a prefix; it must not hide Item #1.
+    # A second line with the same ASIN has the first one's key as a prefix; it must not hide it.
     existing = [[46237, 5.00, "Other", "", True, "", "Amazon Card", "", "", "",
-                 "split-transactions automation amazon 111-0000000-0000001 #10"]]
+                 "split-transactions automation amazon 111-0000000-0000001 B0FAKE0001#2"]]
     rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")], existing_rows=existing,
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     assert [row[10] for row in _sheet_rows(wr)] == [AMAZON_NOTE]
@@ -412,7 +412,7 @@ def test_refund_whose_item_row_is_missing_is_held_with_a_warning(amazon_month, t
     wr.assert_not_called()
     out = capsys.readouterr().out
     assert "'refund without item row': 1" in out
-    assert "111-0000000-0000001 #1" in out and "12.99" in out
+    assert "111-0000000-0000001 B0FAKE0001" in out and "12.99" in out
 
 
 def test_refund_whose_item_row_has_an_odd_e_cell_is_held_not_fatal(amazon_month, tmp_path, capsys):
@@ -461,7 +461,7 @@ def test_unknown_ship_date_row_notes_say_so_and_a_rescrape_writes_nothing(amazon
 
     # The sheet now holds that row; a re-scrape must recognise it by its key.
     existing = [[46237, 14.07, "Trash bags", "", True, "", "Amazon Card", "", "", "",
-                 "split-transactions automation amazon 111-0000000-0000001 #1"
+                 "split-transactions automation amazon 111-0000000-0000001 B0FAKE0001"
                  " (ship date unknown, Order Date used for cutoff)"]]
     rescrape = json.loads(f.read_text())
     rescrape["scraped_on"] = "2026-09-29"
@@ -494,7 +494,7 @@ def _two_item_refund_file(month):
     shipment["tax"] = 0
     first, second = dict(shipment["items"][0]), dict(shipment["items"][0])
     first.update(position=1, short_name="Thing 1", unit_price=30.00, tax=0)
-    second.update(position=2, short_name="Thing 2", unit_price=10.00, tax=0)
+    second.update(position=2, asin="B0FAKE0002", short_name="Thing 2", unit_price=10.00, tax=0)
     shipment["items"] = [first, second]
     src["refunds"] = [{"order_number": "111-0000000-0000001", "positions": [1, 2],
                        "amount": 20.00, "refund_date": "2026-08-20"}]
@@ -506,7 +506,7 @@ def _two_item_refund_file(month):
 def _split_item_row(position, price, send_to_splitwise, for_who):
     return [46237, price, f"Thing {position}", "", send_to_splitwise, "",
             "Amazon Card", for_who, "", "",
-            f"split-transactions automation amazon 111-0000000-0000001 #{position}"]
+            f"split-transactions automation amazon 111-0000000-0000001 B0FAKE000{position}"]
 
 
 def test_refund_across_a_personal_and_a_shared_item_classifies_each_part(amazon_month, tmp_path):
@@ -518,8 +518,8 @@ def test_refund_across_a_personal_and_a_shared_item_classifies_each_part(amazon_
     personal, partners = _sheet_rows(wr)
     assert (personal[1], personal[4], personal[7]) == (-15.00, False, "Both")
     assert (partners[1], partners[4], partners[7]) == (-5.00, True, "Partner")
-    assert personal[10] == "split-transactions automation amazon 111-0000000-0000001 #1 refund 2026-08-20 15.00"
-    assert partners[10] == "split-transactions automation amazon 111-0000000-0000001 #2 refund 2026-08-20 5.00"
+    assert personal[10] == "split-transactions automation amazon 111-0000000-0000001 B0FAKE0001 refund 2026-08-20 15.00"
+    assert partners[10] == "split-transactions automation amazon 111-0000000-0000001 B0FAKE0002 refund 2026-08-20 5.00"
 
 
 def test_rescrape_does_not_duplicate_a_split_refund(amazon_month, tmp_path):
@@ -528,9 +528,9 @@ def test_rescrape_does_not_duplicate_a_split_refund(amazon_month, tmp_path):
     existing = [_split_item_row(1, 30.00, False, "Both"),
                 _split_item_row(2, 10.00, True, "Partner"),
                 [46254, -15.00, "Refund: Thing 1", "", False, "", "Amazon Card",
-                 "Both", "", "", f"{note} #1 refund 2026-08-20 15.00"],
+                 "Both", "", "", f"{note} B0FAKE0001 refund 2026-08-20 15.00"],
                 [46254, -5.00, "Refund: Thing 2", "", True, "", "Amazon Card",
-                 "Partner", "", "", f"{note} #2 refund 2026-08-20 5.00"]]
+                 "Partner", "", "", f"{note} B0FAKE0002 refund 2026-08-20 5.00"]]
     rd, wr = _run([str(f)], existing_rows=existing,
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     wr.assert_not_called()
@@ -544,7 +544,7 @@ WF_NOTE = "split-transactions automation amazon 111-0000000-0000002"
 def _whole_foods_file(month, order_date="2026-09-11", refunds=(), **overrides):
     f = month / "amazon-orders-2026-09-28.json"
     f.write_text(json.dumps({
-        "schema_version": 2, "scraped_on": "2026-09-28",
+        "schema_version": 3, "scraped_on": "2026-09-28",
         "orders": [{
             "kind": "whole_foods", "order_number": "111-0000000-0000002",
             "order_date": order_date, "delivered": True,
@@ -657,9 +657,9 @@ def test_a_whole_foods_refund_row_does_not_stand_in_for_its_order_row(amazon_mon
 
 
 def test_a_whole_foods_order_key_does_not_match_an_item_row_of_the_same_prefix(amazon_month, tmp_path):
-    # Whole word match: a row for "... #1" is not the Order's own row.
+    # Whole word match: an Item row's key is not the Order's own key.
     f = _whole_foods_file(amazon_month)
-    existing = [[46237, 5.00, "Other", "", True, "", "Amazon Card", "", "", "", f"{WF_NOTE} #1"]]
+    existing = [[46237, 5.00, "Other", "", True, "", "Amazon Card", "", "", "", f"{WF_NOTE} B0FAKE0001"]]
     rd, wr = _run([str(f)], existing_rows=existing,
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     assert [row[10] for row in _sheet_rows(wr)] == [WF_NOTE]
@@ -681,7 +681,7 @@ DIGITAL_NOTE = "split-transactions automation amazon D01-0000000-0000003"
 def _digital_file(month, charge_date="2026-09-09"):
     f = month / "amazon-orders-2026-09-28.json"
     f.write_text(json.dumps({
-        "schema_version": 2, "scraped_on": "2026-09-28",
+        "schema_version": 3, "scraped_on": "2026-09-28",
         "orders": [{
             "kind": "digital", "order_number": "D01-0000000-0000003",
             "charge_date": charge_date, "short_name": "Grocery Subscription",

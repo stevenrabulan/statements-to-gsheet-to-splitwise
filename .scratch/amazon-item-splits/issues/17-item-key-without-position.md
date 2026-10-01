@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** needs-triage
+**Status:** resolved
 
 ## What the first real run found (2026-10-01)
 
@@ -25,7 +25,16 @@ Every swap seen was inside one shipment box. No Item moved to another shipment.
 - **A re-scrape can skip or duplicate an Item** when an Order's Items import on different runs (one shipment ships later than another), because the later run may give an already-imported position to a different Item.
 - Rows from one run are still right: each formula is calculated from the Item it describes, and the Order's rows sum to the Order Total.
 
-## To decide
+## Decision (Steven, 2026-10-01): ASIN
+
+- [x] Key is `amazon <order number> <ASIN>`. A second line with the same ASIN in one Order is `<ASIN>#2`, numbered in the file's order among Items that are not cancelled.
+- [x] Each Item carries `asin` (10 capital letters or digits, from its product link). A missing or malformed one fails the import, naming the Order and Item.
+- [x] Schema version 3. The importer accepts only version 3.
+- [x] Positions stay in the file, only to tie a Promo or Refund to its Items. Warnings still name Items as `#<position>`.
+- [x] Scrape prompt, README, and spec addendum (decisions 14 and 15) updated.
+- [x] Today's file re-read for ASINs and rewritten as version 3. Dry run: the same 58 rows.
+
+## Options that were considered
 
 What identifies an Item inside an Order. Options seen on the page:
 
@@ -42,3 +51,5 @@ What identifies an Item inside an Order. Options seen on the page:
 ## Comments
 
 - 2026-10-01: Opened from ticket 15, whose last step says to open this ticket if positions differ between scrapes.
+- 2026-10-01: Implemented. All 86 Items in the first real file have a product link, including books (their ASIN is the 10-digit ISBN) and grocery produce. No Order in it lists one ASIN twice.
+- 2026-10-01: Known limit: when one Order lists the same ASIN on two lines, which line is `#2` follows the file's order, which Amazon can change. Both lines are the same product, so a Refund or a re-scrape can only confuse two rows for the same thing.

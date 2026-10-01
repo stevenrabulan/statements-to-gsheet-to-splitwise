@@ -37,11 +37,11 @@ Each step is done when its check holds.
 - One file per run. Valid JSON only, no comments.
 - If you cannot write to the repo (you are the Chrome side panel), offer the finished file as a download with that same name and tell Steven, who will move it. Skip step 7.
 
-### File format (schema version 2)
+### File format (schema version 3)
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "scraped_on": "2026-10-01",
   "orders": [
     {
@@ -64,6 +64,7 @@ Each step is done when its check holds.
           "items": [
             {
               "position": 1,
+              "asin": "B0FAKE0001",
               "title": "Fakebrand ForceFlex Tall Kitchen Drawstring Trash Bags, 13 Gallon, 80 Count",
               "short_name": "Fakebrand ForceFlex Trash Bags",
               "quantity": 2,
@@ -73,6 +74,7 @@ Each step is done when its check holds.
             },
             {
               "position": 2,
+              "asin": "B0FAKE0002",
               "title": "Fakebrand Stainless Steel Mixing Bowl Set, 3 Piece, Silver",
               "short_name": "Fakebrand Mixing Bowl Set",
               "quantity": 1,
@@ -90,6 +92,7 @@ Each step is done when its check holds.
           "items": [
             {
               "position": 3,
+              "asin": "B0FAKE0003",
               "title": "Fakebrand Bamboo Cutting Board, Large, Natural",
               "short_name": "Fakebrand Bamboo Cutting Board",
               "quantity": 1,
@@ -120,6 +123,7 @@ Each step is done when its check holds.
           "items": [
             {
               "position": 1,
+              "asin": "B0FAKE0004",
               "title": "Fakebrand Silicone Spatula Set, 5 Piece, Red",
               "short_name": "Fakebrand Silicone Spatula Set",
               "quantity": 1,
@@ -137,6 +141,7 @@ Each step is done when its check holds.
           "items": [
             {
               "position": 2,
+              "asin": "B0FAKE0005",
               "title": "Fakebrand Dish Towels, Cotton, 6 Pack, Gray",
               "short_name": "Fakebrand Dish Towels",
               "quantity": 1,
@@ -182,7 +187,7 @@ The example shows each shape once: tax per shipment (first Order), tax once for 
 ### Field rules
 
 **File**
-- `schema_version`: always `2`.
+- `schema_version`: always `3`.
 - `scraped_on`: today's date.
 
 **Every Order**
@@ -209,7 +214,8 @@ The example shows each shape once: tax per shipment (first Order), tax once for 
 Tax goes where Amazon shows it, once: on the Item, or the shipment, or the Order. Leave the other scopes `null`.
 
 **Item**
-- `position`: the Item's number within the whole Order, counting from 1 in the order the details page lists them, continuing across shipments. The importer recognizes the Item on later scrapes by this number, so count the same way every time.
+- `position`: the Item's number within the whole Order, counting from 1, continuing across shipments. It only ties this file together: a Promo's or Refund's `positions` point at these numbers. Amazon changes the order of an Order's Items between page loads, so read each Order's Items in one reading and number them from that reading.
+- `asin`: the 10-character product code in the Item's product link (`/dp/<ASIN>` or `/gp/product/<ASIN>`), capital letters and digits, copied exactly. The importer recognizes the Item on later scrapes by this code, so it must come from the link, never from memory. When an Item has no product link, stop and tell Steven.
 - `title`: the full product title, exactly as shown.
 - `short_name`: the **brand plus a plain description**, in normal case (never ALL CAPS). Keep the brand as shown. Drop sizes, counts, colors, model numbers, and marketing words. Write full words, no made-up abbreviations. Examples: `Glad ForceFlex Trash Bags`, `Anker USB-C Charging Cable`, `Kirkland Signature Almonds`. With no brand, a plain description alone.
 - `quantity`: whole number shown (1 if not shown).

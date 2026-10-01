@@ -190,7 +190,7 @@ Warnings to expect: a discount Amazon shows with no Items it applies to is sprea
 
 #### Keys and Refunds
 
-Rows are deduplicated by a key in Notes (Column K): `split-transactions automation amazon <order number> #<position>` for an Item, `split-transactions automation amazon <order number>` for a Whole Foods or Digital Order. Re-scraping never duplicates rows.
+Rows are deduplicated by a key in Notes (Column K): `split-transactions automation amazon <order number> <ASIN>` for an Item (the product code from its Amazon link; a second line with the same ASIN in one Order ends `#2`), `split-transactions automation amazon <order number>` for a Whole Foods or Digital Order. Re-scraping never duplicates rows.
 
 Returns and partial refunds arrive on a later scrape as **negative rows** dated on the refund date. They copy "Send to Splitwise" and "For who" from the original row. One Refund that covers several Items becomes one negative row per Item, split in proportion to their Loaded Costs. A Whole Foods Refund is one negative row, `Refund: Whole Foods`. A Refund on a Digital Order is skipped (enter it by hand).
 
