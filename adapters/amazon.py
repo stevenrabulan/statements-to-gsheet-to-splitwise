@@ -28,7 +28,8 @@ _PAYMENT_TYPES = {"card", "gift_card", "points"}
 CENT = Decimal("0.01")
 
 # Every Amazon row's Notes carry a stable key (spec, "Deduplication"):
-# "amazon <order number> #<position>", plus " refund <date> <amount>" on a Refund.
+# "amazon <order number> #<position>", plus " refund <date> <amount>" on a Refund
+# (the amount of that Item's part when one Refund covers several Items).
 # Matched as whole words, so "#1" never matches "#10" and an Item key never
 # matches its Refund's key.
 _ITEM_KEY = r"amazon \S+ #\d+"
@@ -151,69 +152,99 @@ def _count_before_cutoff(cost: "_ItemCost", cutoff: date, where: str, result: Pa
 
 
 def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -> None:
-    """A Refund becomes a plain negative row. Its classification is copied from
-    the Item's sheet row later, by the CLI, which can see the sheet."""
+    """A Refund becomes plain negative rows, one per Item it covers. Each row's
+    classification is copied from its Item's sheet row later, by the CLI, which
+    can see the sheet."""
     order_number = _get(refund, "order_number", str, "refund")
-    position = _get(refund, "position", int, f"refund on order {order_number}")
-    where = f"order {order_number} #{position}"
-    amount = _money(_get(refund, "amount", (int, Decimal), f"{where} refund"),
-                    f"{where} refund amount")
-    if amount <= 0:
-        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
-    refund_date = _date(_get(refund, "refund_date", str, f"{where} refund"), f"{where} refund")
-    what = f"Refund of {amount:.2f} on {refund_date.isoformat()}"
-
     order = orders.get(order_number)
+    positions = _get(refund, "positions", list, f"refund on order {order_number}")
+    order_where = f"order {order_number}"
     if order is not None and order["kind"] in _NOT_IMPORTED_YET:
         label = _NOT_IMPORTED_YET[order["kind"]]
+        amount, refund_date = _refund_amount_and_date(refund, order_where)
         result.skipped[f"refund on {label} (not imported yet)"] += 1
-        result.warnings.append(f"amazon {where}: {what} is on a {label}, which is not "
-                               f"imported yet; Refund skipped")
+        result.warnings.append(
+            f"amazon {order_where}: Refund of {amount:.2f} on {refund_date.isoformat()} is on "
+            f"a {label}, which is not imported yet; Refund skipped")
         return
-    found = _shipped_item(order, position, where) if order else None
+    if (not positions or len(set(positions)) != len(positions)
+            or any(isinstance(p, bool) or not isinstance(p, int) for p in positions)):
+        raise ImporterError(f"amazon {order_where}: refund 'positions' must list at least one "
+                            f"distinct whole number, got {positions!r}")
+    where = f"{order_where} " + ", ".join(f"#{p}" for p in positions)
+    amount, refund_date = _refund_amount_and_date(refund, where)
+    if amount <= 0:
+        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
+    what = f"Refund of {amount:.2f} on {refund_date.isoformat()}"
+
+    found = _shipped_items(order, positions, where) if order else None
     if found is None:
         result.skipped["refund without item"] += 1
         result.warnings.append(f"amazon {where}: {what} matches no shipped Item in this file; "
                                f"Refund skipped, enter it by hand")
         return
-    short_name, shipped_on, known = found
     cutoff = config.ignore_before
-    if cutoff is not None and shipped_on < cutoff:
-        # The Item is a Charge row from before Item rows existed.
-        result.skipped[f"refund before {cutoff.isoformat()}"] += 1
-        how = (f"shipped {shipped_on.isoformat()}" if known
-               else f"with no ship date, ordered {shipped_on.isoformat()}")
-        result.warnings.append(f"amazon {where}: {what} is for an Item {how}, before the "
-                               f"{cutoff.isoformat()} cutoff; Refund skipped, enter it by hand")
-        return
+    for short_name, shipped_on, known in found:
+        if cutoff is not None and shipped_on < cutoff:
+            # The Item is a Charge row from before Item rows existed.
+            result.skipped[f"refund before {cutoff.isoformat()}"] += 1
+            how = (f"shipped {shipped_on.isoformat()}" if known
+                   else f"with no ship date, ordered {shipped_on.isoformat()}")
+            result.warnings.append(f"amazon {where}: {what} is for an Item {how}, before the "
+                                   f"{cutoff.isoformat()} cutoff; Refund skipped, enter it by hand")
+            return
 
     account, warning = _payment_method(_get(order, "payment", list, f"order {order_number}"),
                                        f"order {order_number}", config, accounts)
     if warning and warning not in result.warnings:
         result.warnings.append(warning)
-    item = item_key(order_number, position)
-    result.transactions.append(Transaction(
-        date=refund_date,
-        description=f"Refund: {short_name}",
-        amount=-float(amount),
-        account=account,
-        key=refund_key(item, refund_date, amount),
-        refunds=item,
-    ))
+    parts = _refund_parts(order, positions, amount, where)
+    for position, (short_name, _, _), part in zip(positions, found, parts):
+        if not part:
+            continue    # a share too small to be a cent is not a row
+        item = item_key(order_number, position)
+        result.transactions.append(Transaction(
+            date=refund_date,
+            description=f"Refund: {short_name}",
+            amount=-float(part),
+            account=account,
+            key=refund_key(item, refund_date, part),
+            refunds=item,
+        ))
 
 
-def _shipped_item(order, position: int, where: str) -> tuple[str, date, bool] | None:
-    """(short name, cutoff date, whether it is a real ship date) of the Order's
-    shipped, non-cancelled Item at `position`, or None when there is no such Item.
-    With no ship date the Order Date is the cutoff date."""
+def _refund_amount_and_date(refund, where: str) -> tuple[Decimal, date]:
+    amount = _money(_get(refund, "amount", (int, Decimal), f"{where} refund"),
+                    f"{where} refund amount")
+    return amount, _date(_get(refund, "refund_date", str, f"{where} refund"), f"{where} refund")
+
+
+def _refund_parts(order, positions: list[int], amount: Decimal, where: str) -> list[Decimal]:
+    """Split a Refund across its Items in proportion to their Loaded Costs, so
+    each part follows its own Item. The parts sum exactly to `amount`."""
+    if len(positions) == 1:
+        return [amount]
+    cost_of = {c.position: c.loaded
+               for c in _loaded_costs(order, _get(order, "shipments", list, where), where, [])}
+    return _spread(amount, [cost_of[p] for p in positions])
+
+
+def _shipped_items(order, positions: list[int], where: str) -> list[tuple[str, date, bool]] | None:
+    """(short name, cutoff date, whether it is a real ship date) for each of
+    `positions`, in that order, or None when any of them is not a shipped,
+    non-cancelled Item of the Order. With no ship date the Order Date is the
+    cutoff date."""
+    by_position = {}
     for shipment in _get(order, "shipments", list, where):
         if shipment.get("shipped") is not True:
             continue
         for item in _live_items(shipment, where):
-            if item.get("position") == position:
-                shipped_on, known = _ship_date(shipment, order, where)
-                return (_get(item, "short_name", str, where).strip(), shipped_on, known)
-    return None
+            shipped_on, known = _ship_date(shipment, order, where)
+            by_position[item.get("position")] = (
+                _get(item, "short_name", str, where).strip(), shipped_on, known)
+    if any(p not in by_position for p in positions):
+        return None
+    return [by_position[p] for p in positions]
 
 
 def _ship_date(shipment, order, where: str) -> tuple[date, bool]:

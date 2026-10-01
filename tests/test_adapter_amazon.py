@@ -496,8 +496,8 @@ def test_order_entirely_before_the_cutoff_is_ignored_even_if_totals_disagree(tmp
     assert result.warnings == []
 
 
-def _refund(amount, refund_date="2026-08-20", order_number="111-0000000-0000009", position=1):
-    return {"order_number": order_number, "position": position,
+def _refund(amount, refund_date="2026-08-20", order_number="111-0000000-0000009", positions=(1,)):
+    return {"order_number": order_number, "positions": list(positions),
             "amount": amount, "refund_date": refund_date}
 
 
@@ -684,3 +684,99 @@ def test_coupon_with_unknown_targets_that_breaks_the_total_still_skips_the_order
     result, rows = _rows(tmp_path, order)
     assert rows == {}
     assert result.skipped["total mismatch"] == 2
+
+
+def _two_item_order(price_1=30.00, price_2=10.00, ship_2="2026-08-11"):
+    return _multi(price_1 + price_2,
+                  _shipment_on("2026-08-11", _item(1, price_1, tax=0)),
+                  _shipment_on(ship_2, _item(2, price_2, tax=0)))
+
+
+def test_refund_covering_several_items_splits_by_loaded_cost(tmp_path):
+    result = _parse(_write(tmp_path, _two_item_order(),
+                           refunds=[_refund(20.00, positions=[1, 2])]))
+    first, second = _refund_rows(result)
+    assert (first.amount, second.amount) == (-15.00, -5.00)
+    assert (first.description, second.description) == ("Refund: Thing 1", "Refund: Thing 2")
+    assert (first.refunds, second.refunds) == ("amazon 111-0000000-0000009 #1",
+                                               "amazon 111-0000000-0000009 #2")
+    assert first.key == "amazon 111-0000000-0000009 #1 refund 2026-08-20 15.00"
+    assert second.key == "amazon 111-0000000-0000009 #2 refund 2026-08-20 5.00"
+    assert first.date == second.date == date(2026, 8, 20)
+    assert result.warnings == []
+
+
+def test_split_parts_sum_to_the_refund_and_none_has_the_wrong_sign(tmp_path):
+    # $0.05 across three equal Items: 2, 2, 1 cents, never a negative part.
+    order = _multi(30.00, *(_shipment_on("2026-08-11", _item(n, 10.00, tax=0)) for n in (1, 2, 3)))
+    result = _parse(_write(tmp_path, order, refunds=[_refund(0.05, positions=[1, 2, 3])]))
+    amounts = [t.amount for t in _refund_rows(result)]
+    assert sorted(amounts) == [-0.02, -0.02, -0.01]
+    assert round(sum(amounts), 2) == -0.05
+    assert all(a < 0 for a in amounts)
+
+
+def test_split_weights_include_each_items_tax_and_shipping(tmp_path):
+    # Loaded Costs 10.00 + 1.00 tax = 11.00 and 10.00 + 4.00 tax = 14.00.
+    order = _multi(25.00, _shipment_on("2026-08-11", _item(1, 10.00, tax=1.00), _item(2, 10.00, tax=4.00)))
+    result = _parse(_write(tmp_path, order, refunds=[_refund(25.00, positions=[1, 2])]))
+    assert [t.amount for t in _refund_rows(result)] == [-11.00, -14.00]
+
+
+def test_one_position_refund_keeps_its_plain_key(tmp_path):
+    result = _parse(_write(tmp_path, _two_item_order(), refunds=[_refund(7.00, positions=[2])]))
+    [refund] = _refund_rows(result)
+    assert refund.amount == -7.00
+    assert refund.key == "amazon 111-0000000-0000009 #2 refund 2026-08-20 7.00"
+
+
+def test_split_ignores_items_the_refund_does_not_list(tmp_path):
+    order = _multi(60.00, *(_shipment_on("2026-08-11", _item(n, 20.00, tax=0)) for n in (1, 2, 3)))
+    result = _parse(_write(tmp_path, order, refunds=[_refund(10.00, positions=[1, 3])]))
+    assert [(t.refunds[-2:], t.amount) for t in _refund_rows(result)] == [("#1", -5.00), ("#3", -5.00)]
+
+
+def test_refund_listing_an_item_that_matches_nothing_skips_the_whole_refund(tmp_path):
+    result = _parse(_write(tmp_path, _two_item_order(),
+                           refunds=[_refund(20.00, positions=[1, 9])]))
+    assert _refund_rows(result) == []
+    assert result.skipped["refund without item"] == 1
+    [warning] = result.warnings
+    assert "#9" in warning and "20.00" in warning
+
+
+def test_refund_listing_an_unshipped_item_skips_the_whole_refund(tmp_path):
+    order = _multi(40.00, _shipment_on("2026-08-11", _item(1, 30.00, tax=0)),
+                   _shipment_on(None, _item(2, 10.00, tax=0), shipped=False))
+    result = _parse(_write(tmp_path, order, refunds=[_refund(20.00, positions=[1, 2])]))
+    assert _refund_rows(result) == []
+    assert result.skipped["refund without item"] == 1
+
+
+def test_refund_listing_an_item_before_the_cutoff_skips_the_whole_refund(tmp_path):
+    result = _parse(_write(tmp_path, _two_item_order(ship_2="2026-07-20"),
+                           refunds=[_refund(20.00, positions=[1, 2])]))
+    assert _refund_rows(result) == []
+    assert result.skipped["refund before 2026-07-29"] == 1
+    [warning] = result.warnings
+    assert "20.00" in warning and "2026-07-29" in warning
+
+
+def test_refund_positions_must_be_a_nonempty_list_of_distinct_whole_numbers(tmp_path):
+    for positions in ([], [1, 1], ["1"]):
+        with pytest.raises(ImporterError, match="111-0000000-0000009.*positions"):
+            _parse(_write(tmp_path, _order(), refunds=[_refund(5.00, positions=positions)]))
+
+
+def test_the_old_single_position_field_is_rejected(tmp_path):
+    old = {"order_number": "111-0000000-0000009", "position": 1,
+           "amount": 5.00, "refund_date": "2026-08-20"}
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*positions"):
+        _parse(_write(tmp_path, _order(), refunds=[old]))
+
+
+def test_refund_with_empty_positions_on_a_whole_foods_order_is_still_skipped_not_fatal(tmp_path):
+    wf = {"kind": "whole_foods", "order_number": "111-0000000-0000050"}
+    result = _parse(_write(tmp_path, wf, refunds=[_refund(4.99, order_number="111-0000000-0000050",
+                                                           positions=[])]))
+    assert result.skipped["refund on Whole Foods Order (not imported yet)"] == 1

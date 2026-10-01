@@ -339,7 +339,7 @@ AMAZON_REFUND_NOTE = f"{AMAZON_NOTE} refund 2026-08-20 12.99"
 
 def _amazon_file_with_refund(month):
     src = json.loads(AMAZON_FIXTURE.read_text())
-    src["refunds"] = [{"order_number": "111-0000000-0000001", "position": 1,
+    src["refunds"] = [{"order_number": "111-0000000-0000001", "positions": [1],
                        "amount": 12.99, "refund_date": "2026-08-20"}]
     f = month / "amazon-orders-2026-09-28.json"
     f.write_text(json.dumps(src))
@@ -483,3 +483,54 @@ def test_untargeted_coupon_is_written_in_the_discount_term_and_warned(amazon_mon
     assert _sheet_rows(wr)[0][1] == "=12.99+1.08-2"
     out = capsys.readouterr().out
     assert "111-0000000-0000001" in out and "2.00" in out
+
+
+def _two_item_refund_file(month):
+    """Items #1 (30.00) and #2 (10.00) on one Order, one Refund of 20.00 across both."""
+    src = json.loads(AMAZON_FIXTURE.read_text())
+    order = src["orders"][0]
+    order["order_total"] = 40.00
+    shipment = order["shipments"][0]
+    shipment["tax"] = 0
+    first, second = dict(shipment["items"][0]), dict(shipment["items"][0])
+    first.update(position=1, short_name="Thing 1", unit_price=30.00, tax=0)
+    second.update(position=2, short_name="Thing 2", unit_price=10.00, tax=0)
+    shipment["items"] = [first, second]
+    src["refunds"] = [{"order_number": "111-0000000-0000001", "positions": [1, 2],
+                       "amount": 20.00, "refund_date": "2026-08-20"}]
+    f = month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps(src))
+    return f
+
+
+def _split_item_row(position, price, send_to_splitwise, for_who):
+    return [46237, price, f"Thing {position}", "", send_to_splitwise, "",
+            "Amazon Card", for_who, "", "",
+            f"split-transactions automation amazon 111-0000000-0000001 #{position}"]
+
+
+def test_refund_across_a_personal_and_a_shared_item_classifies_each_part(amazon_month, tmp_path):
+    f = _two_item_refund_file(amazon_month)
+    existing = [_split_item_row(1, 30.00, False, "Both"),    # Personal
+                _split_item_row(2, 10.00, True, "Partner")]    # Partner's
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    personal, partners = _sheet_rows(wr)
+    assert (personal[1], personal[4], personal[7]) == (-15.00, False, "Both")
+    assert (partners[1], partners[4], partners[7]) == (-5.00, True, "Partner")
+    assert personal[10] == "split-transactions automation amazon 111-0000000-0000001 #1 refund 2026-08-20 15.00"
+    assert partners[10] == "split-transactions automation amazon 111-0000000-0000001 #2 refund 2026-08-20 5.00"
+
+
+def test_rescrape_does_not_duplicate_a_split_refund(amazon_month, tmp_path):
+    f = _two_item_refund_file(amazon_month)
+    note = "split-transactions automation amazon 111-0000000-0000001"
+    existing = [_split_item_row(1, 30.00, False, "Both"),
+                _split_item_row(2, 10.00, True, "Partner"),
+                [46254, -15.00, "Refund: Thing 1", "", False, "", "Amazon Card",
+                 "Both", "", "", f"{note} #1 refund 2026-08-20 15.00"],
+                [46254, -5.00, "Refund: Thing 2", "", True, "", "Amazon Card",
+                 "Partner", "", "", f"{note} #2 refund 2026-08-20 5.00"]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()

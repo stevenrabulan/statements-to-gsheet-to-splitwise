@@ -62,7 +62,7 @@ You are recording Amazon order data into a JSON file. You are a copier, not a ca
       }]
     }]
   }],
-  "refunds": [{"order_number": "111-0000000-0000001", "position": 1,
+  "refunds": [{"order_number": "111-0000000-0000001", "positions": [1],
                "amount": 12.99, "refund_date": "2026-08-20"}]
 }
 ```
@@ -105,7 +105,7 @@ You are recording Amazon order data into a JSON file. You are a copier, not a ca
 - `tax`: the Item's own tax **only if Amazon shows tax per Item**. Otherwise `null`. Never split shipment tax across Items.
 
 **Refund**
-- `order_number` and `position`: which Item the refund is for.
+- `order_number` and `positions`: which Items the refund is for. One refund Amazon shows against several Items is one entry listing all their positions. Never split its amount yourself.
 - `amount`: the refund amount Amazon shows, positive.
 - `refund_date`: the date shown for the refund (issued or processed). If only "expected by" is shown and the money has not been refunded yet, skip it.
 - Partial refunds on one Item are separate entries.
