@@ -104,7 +104,8 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         result.skipped["not ready"] += sum(len(_live_items(sh, where)) for sh in shipments)
         return
 
-    costs = _loaded_costs(order, shipments, where)
+    notices = []    # warnings that belong to the Order only if it is imported
+    costs = _loaded_costs(order, shipments, where, notices)
     cutoff = config.ignore_before
     if cutoff is not None and all(c.shipped_on < cutoff for c in costs):
         # Recorded as Charge rows already; its totals are not our concern.
@@ -120,6 +121,7 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
             f"Order skipped")
         return
 
+    result.warnings += notices
     account, warning = _payment_method(_get(order, "payment", list, where),
                                        where, config, accounts)
     if warning:
@@ -263,9 +265,11 @@ class _ItemCost:
         return self.net + self.tax + self.shipping - self.discount
 
 
-def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
+def _loaded_costs(order, shipments, where, notices: list[str]) -> list[_ItemCost]:
     """Loaded Cost for every non-cancelled Item, in the spec's order: Promos,
-    then tax, then shipping and whole-Order discounts."""
+    then tax, then shipping and whole-Order discounts. A Promo with no known
+    targets is an Adjustment (CONTEXT.md): it joins the discounts, and `notices`
+    gets a warning for it."""
     groups = []     # [(shipment, [_ItemCost])], so shipment-scope spreads know their Items
     for shipment in shipments:
         live = _live_items(shipment, where)
@@ -274,12 +278,19 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
         groups.append((shipment, costs))
     costs = [c for _, group in groups for c in group]
 
+    untargeted = []     # amounts of coupons whose Items Amazon doesn't show
     for promo in _get(order, "promos", list, where):
         positions = _get(promo, "positions", list, where)
+        amount = _money(_get(promo, "amount", (int, Decimal), where), f"{where} promo")
+        if not positions:
+            if costs:
+                untargeted.append(amount)
+                notices.append(f"amazon {where}: coupon of {amount:.2f} has no Items Amazon "
+                               f"shows; spread across every Item")
+            continue
         targets = [c for c in costs if c.position in positions]
         if not targets:
             continue    # every targeted Item was cancelled
-        amount = _money(_get(promo, "amount", (int, Decimal), where), f"{where} promo")
         for cost, part in zip(targets, _spread(amount, [c.line for c in targets])):
             cost.promo += part
 
@@ -311,8 +322,9 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
     for cost, part in zip(costs, _spread(shipping, [c.net for c in costs])):
         cost.shipping += part
 
-    for discount in _get(order, "discounts", list, where):
-        amount = _money(_get(discount, "amount", (int, Decimal), where), f"{where} discount")
+    discounts = [_money(_get(d, "amount", (int, Decimal), where), f"{where} discount")
+                 for d in _get(order, "discounts", list, where)]
+    for amount in discounts + untargeted:
         for cost, part in zip(costs, _spread(amount, [c.net for c in costs])):
             cost.discount += part
     return costs

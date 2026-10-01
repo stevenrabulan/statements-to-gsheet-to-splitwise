@@ -469,3 +469,17 @@ def test_unknown_ship_date_row_notes_say_so_and_a_rescrape_writes_nothing(amazon
     rd, wr = _run([str(f)], existing_rows=existing,
                   log_path=tmp_path / "log2.json", accounts_map=AMAZON_ACCOUNTS)
     wr.assert_not_called()
+
+
+def test_untargeted_coupon_is_written_in_the_discount_term_and_warned(amazon_month, tmp_path, capsys):
+    # Fixture Item: 12.99 + 1.08 tax = 14.07; a $2 coupon with no targets lowers the total.
+    src = json.loads(AMAZON_FIXTURE.read_text())
+    order = src["orders"][0]
+    order["promos"] = [{"name": "Coupon", "amount": 2.00, "positions": []}]
+    order["order_total"] = 12.07
+    f = amazon_month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps(src))
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert _sheet_rows(wr)[0][1] == "=12.99+1.08-2"
+    out = capsys.readouterr().out
+    assert "111-0000000-0000001" in out and "2.00" in out

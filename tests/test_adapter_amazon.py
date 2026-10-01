@@ -628,3 +628,59 @@ def test_refund_on_an_item_with_no_ship_date_and_an_old_order_date_is_skipped(tm
     assert result.transactions == []
     assert result.skipped["refund before 2026-07-29"] == 1
     assert any("4.25" in w and "111-0000000-0000009" in w for w in result.warnings)
+
+
+def test_coupon_with_unknown_targets_is_spread_as_a_discount_with_a_warning(tmp_path):
+    # $3 over net 20 / 10 -> 2 / 1, written in the discount term
+    order = _multi(27.00, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
+                   promos=[{"name": "Coupon", "amount": 3.00, "positions": []}])
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=20-2"
+    assert rows["2"].amount_formula == "=10-1"
+    assert result.warnings == [
+        "amazon order 111-0000000-0000009: coupon of 3.00 has no Items Amazon shows; "
+        "spread across every Item"]
+    assert not result.skipped
+
+
+def test_coupon_with_unknown_targets_spreads_by_price_after_own_promos(tmp_path):
+    # $5 promo on #2 leaves net 10 / 5; the $3 coupon splits 2 / 1 after it
+    order = _multi(12.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0)),
+                   promos=[{"name": "Save $5", "amount": 5.00, "positions": [2]},
+                           {"name": "Coupon", "amount": 3.00, "positions": []}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10-2"
+    assert rows["2"].amount_formula == "=10-5-1"
+
+
+def test_coupon_with_unknown_targets_sits_beside_a_whole_order_discount(tmp_path):
+    order = _multi(25.00, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
+                   discounts=[{"name": "Order discount", "amount": 2.00}],
+                   promos=[{"name": "Coupon", "amount": 3.00, "positions": []}])
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=20-3.33"
+    assert rows["2"].amount_formula == "=10-1.67"
+
+
+def test_coupon_with_unknown_targets_skips_cancelled_items(tmp_path):
+    order = _multi(8.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0, cancelled=True)),
+                   promos=[{"name": "Coupon", "amount": 2.00, "positions": []}])
+    _, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+    assert rows["1"].amount_formula == "=10-2"
+
+
+def test_promo_whose_listed_items_were_all_cancelled_is_still_ignored(tmp_path):
+    order = _multi(10.00, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0, cancelled=True)),
+                   promos=[{"name": "Save $3", "amount": 3.00, "positions": [2]}])
+    result, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10"
+    assert result.warnings == []
+
+
+def test_coupon_with_unknown_targets_that_breaks_the_total_still_skips_the_order(tmp_path):
+    order = _multi(30.00, _shipment(_item(1, 20.00, tax=0), _item(2, 10.00, tax=0)),
+                   promos=[{"name": "Coupon", "amount": 3.00, "positions": []}])
+    result, rows = _rows(tmp_path, order)
+    assert rows == {}
+    assert result.skipped["total mismatch"] == 2
