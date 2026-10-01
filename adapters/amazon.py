@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
 from models import AccountConfig, ImporterError, ParseResult, Transaction
@@ -325,15 +325,21 @@ def _item_cost(item, order_where, shipped_on: date) -> _ItemCost:
 
 
 def _spread(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
-    """Split `total` across `weights` in cents. Parts sum exactly to `total`;
-    the leftover goes to the largest weight (the first one on a tie)."""
+    """Split `total` across `weights` in cents. Parts sum exactly to `total`.
+    Each part is rounded down, then the leftover cents go one each to the parts
+    that lost the most (on a tie, the larger weight, then the earlier one)."""
     if not weights or not total:
         return [Decimal(0)] * len(weights)
     if not sum(weights):
         weights = [Decimal(1)] * len(weights)
     whole = sum(weights)
-    parts = [(total * w / whole).quantize(CENT, rounding=ROUND_HALF_UP) for w in weights]
-    parts[weights.index(max(weights))] += total - sum(parts)
+    exact = [total * w / whole for w in weights]
+    parts = [share.quantize(CENT, rounding=ROUND_FLOOR) for share in exact]
+    leftover = int((total - sum(parts)) / CENT)
+    by_loss = sorted(range(len(parts)),
+                     key=lambda i: (parts[i] - exact[i], -weights[i], i))
+    for i in by_loss[:leftover]:
+        parts[i] += CENT
     return parts
 
 

@@ -244,6 +244,31 @@ def test_leftover_cent_lands_on_the_larger_item(tmp_path):
     assert rows["2"].amount_formula == "=10"
 
 
+def test_small_amount_over_many_items_never_goes_negative(tmp_path):
+    # $0.05 over seven equal Items: five get a cent, two get nothing
+    items = [_item(n, 1.00) for n in range(1, 8)]
+    order = _multi(7.05, _shipment(*items, tax=None), tax=0.05)
+    result, rows = _rows(tmp_path, order)
+    assert [rows[str(n)].amount_formula for n in range(1, 8)] == ["=1+0.01"] * 5 + ["=1"] * 2
+    assert result.warnings == []
+
+
+def test_leftover_cents_go_to_the_parts_cut_off_the_most(tmp_path):
+    # $0.05 over 1/1/1/1/1/1/1/2: exact shares 0.0056 x7 and 0.0111. The $2 Item
+    # keeps its whole cent and the other four cents go to the first four Items.
+    items = [_item(n, 1.00) for n in range(1, 8)] + [_item(8, 2.00)]
+    order = _multi(9.05, _shipment(*items, tax=None), tax=0.05)
+    _, rows = _rows(tmp_path, order)
+    assert [rows[str(n)].amount for n in range(1, 9)] == [1.01] * 4 + [1.00] * 3 + [2.01]
+
+
+def test_equal_items_split_an_odd_cent_with_the_extra_on_the_first(tmp_path):
+    order = _multi(20.03, _shipment(_item(1, 10.00), _item(2, 10.00), tax=None), tax=0.03)
+    _, rows = _rows(tmp_path, order)
+    assert rows["1"].amount_formula == "=10+0.02"
+    assert rows["2"].amount_formula == "=10+0.01"
+
+
 def test_total_mismatch_skips_the_whole_order_with_a_warning(tmp_path):
     order = _multi(99.99, _shipment(_item(1, 10.00, tax=0), _item(2, 10.00, tax=0)))
     result = _parse(_write(tmp_path, order))
