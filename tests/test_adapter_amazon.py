@@ -998,6 +998,35 @@ def test_refund_positions_must_be_a_nonempty_list_of_distinct_whole_numbers(tmp_
             _parse(_write(tmp_path, _order(), refunds=[_refund(5.00, positions=positions)]))
 
 
+def test_two_items_with_the_same_position_fail_loudly(tmp_path):
+    # Both would get the key "... #1", so one row would hide the other.
+    order = _multi(20.00, _shipment_on("2026-08-11", _item(1, 10.00, tax=0)),
+                   _shipment_on("2026-08-12", _item(1, 10.00, tax=0)))
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*position 1 .*more than one Item"):
+        _parse(_write(tmp_path, order))
+
+
+def test_a_repeated_position_fails_loudly_even_when_the_order_is_not_ready(tmp_path):
+    order = _multi(20.00, _shipment_on("2026-08-11", _item(1, 10.00, tax=0)),
+                   _shipment_on(None, _item(1, 10.00, tax=0), shipped=False))
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*position 1 "):
+        _parse(_write(tmp_path, order, refunds=[_refund(5.00)]))
+
+
+def test_a_cancelled_item_may_repeat_a_position(tmp_path):
+    order = _multi(10.00, _shipment_on("2026-08-11", _item(1, 10.00, tax=0),
+                                       _item(1, 10.00, cancelled=True)))
+    _, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+
+
+@pytest.mark.parametrize("position", [0, -1, "1", 1.5, True, None])
+def test_item_position_must_be_a_whole_number_from_one(tmp_path, position):
+    order = _multi(10.00, _shipment_on("2026-08-11", _item(position, 10.00, tax=0)))
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*position"):
+        _parse(_write(tmp_path, order))
+
+
 def test_the_old_single_position_field_is_rejected(tmp_path):
     old = {"order_number": "111-0000000-0000009", "position": 1,
            "amount": 5.00, "refund_date": "2026-08-20"}

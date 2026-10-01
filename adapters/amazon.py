@@ -110,6 +110,7 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         _parse_whole_foods(order, order_number, order_date, config, accounts, result)
         return
     shipments = _get(order, "shipments", list, where)
+    _check_positions(shipments, where)
 
     if not _ready(shipments, where):
         result.skipped["not ready"] += sum(len(_live_items(sh, where)) for sh in shipments)
@@ -393,7 +394,7 @@ def _shipped_items(order, positions: list[int], where: str) -> list[tuple[str, d
             continue
         for item in _live_items(shipment, where):
             shipped_on, known = _ship_date(shipment, order, where)
-            by_position[item.get("position")] = (
+            by_position[_get(item, "position", int, where)] = (
                 _get(item, "short_name", str, where).strip(), shipped_on, known)
     if any(p not in by_position for p in positions):
         return None
@@ -412,6 +413,23 @@ def _live_items(shipment, where: str) -> list:
     """The shipment's Items that were not cancelled."""
     return [item for item in _get(shipment, "items", list, where)
             if not _cancelled(item, where)]
+
+
+def _check_positions(shipments, where: str) -> None:
+    """Every non-cancelled Item's position is a whole number from 1, used once
+    in the Order. The position is the Item's key, so a repeat would let one row
+    hide another."""
+    seen = set()
+    for shipment in shipments:
+        for item in _live_items(shipment, where):
+            position = _get(item, "position", int, where)
+            if position < 1:
+                raise ImporterError(
+                    f"amazon {where}: item 'position' must be 1 or more, got {position}")
+            if position in seen:
+                raise ImporterError(
+                    f"amazon {where}: position {position} is on more than one Item")
+            seen.add(position)
 
 
 def _ready(shipments, where: str) -> bool:

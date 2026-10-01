@@ -29,3 +29,4 @@
 - The Amazon entry reuses `ignore_before` as its Cutoff Date. The CLI's generic cutoff still compares Order Date for Amazon rows, and cancelled or unshipped Items are still written. Ticket 04 owns both.
 - If an Order is paid by gift card plus points with no card, the Payment Method falls back to the Amazon entry's name with a warning. The spec doesn't cover this case.
 - The key format lives in `adapters/amazon.py` (`item_key`, `KEY_PATTERN`). `KEY_PATTERN` already recognizes Refund keys, so an Item key never matches a Refund row.
+- 2026-10-01 Review follow-up: the importer now fails loudly when two non-cancelled Items of one Order share a `position`, or a `position` is below 1. Why: the position is the Item's key, so a repeat would let one row hide the other. The scrape prompt already says to count from 1 across shipments.
