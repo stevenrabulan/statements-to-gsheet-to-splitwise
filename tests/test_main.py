@@ -541,7 +541,7 @@ def test_rescrape_does_not_duplicate_a_split_refund(amazon_month, tmp_path):
 WF_NOTE = "split-transactions automation amazon 111-0000000-0000002"
 
 
-def _whole_foods_file(month, order_date="2026-09-11", refunds=()):
+def _whole_foods_file(month, order_date="2026-09-11", refunds=(), **overrides):
     f = month / "amazon-orders-2026-09-28.json"
     f.write_text(json.dumps({
         "schema_version": 2, "scraped_on": "2026-09-28",
@@ -551,8 +551,9 @@ def _whole_foods_file(month, order_date="2026-09-11", refunds=()):
             "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
             "order_total": 113.99,
             "additions": [{"name": "Subtotal", "amount": 106.99},
-                        {"name": "Driver tip", "amount": 7.00}],
+                          {"name": "Driver tip", "amount": 7.00}],
             "discounts": [],
+            **overrides,
         }],
         "refunds": list(refunds)}))
     return f
@@ -592,6 +593,22 @@ def test_whole_foods_order_before_the_cutoff_is_not_written(amazon_month, tmp_pa
     rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     wr.assert_not_called()
     assert "'before 2026-07-29': 1" in capsys.readouterr().out
+
+
+def test_whole_foods_order_with_a_total_mismatch_is_not_written(amazon_month, tmp_path, capsys):
+    f = _whole_foods_file(amazon_month, order_total=114.99)
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    out = capsys.readouterr().out
+    assert "'total mismatch': 1" in out
+    assert "111-0000000-0000002" in out and "114.99" in out and "113.99" in out
+
+
+def test_whole_foods_order_not_delivered_is_not_written(amazon_month, tmp_path, capsys):
+    f = _whole_foods_file(amazon_month, delivered=False)
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert "'not ready': 1" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("send_to_splitwise, for_who", [
