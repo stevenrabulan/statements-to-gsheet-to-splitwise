@@ -232,8 +232,8 @@ The first real scrape (60 Orders, 2 Refunds) showed gaps between what Amazon dis
 9. **Digital Orders.** The scrape reads the Digital Orders tab. One row per Digital Order: description is what was bought (e.g. `Grocery Subscription`), date is the charge date, Amount is the amount shown, key `amazon <order number>` (e.g. `amazon D01-...`), Payment Method from the card on its details page, cutoff compared with the charge date, defaults to Shared.
 10. **The Amazon card is no longer imported.** The card-import filter stays as a safety net. The Prime fee (yearly, no charge history shown) and Audible (separate sign-in) are entered by hand.
 11. **Scrape scope.** Only Steven's own account, never another account's Orders. Whole Foods Orders are found by walking the 90-day Orders list, not the search box.
-13. **Where the scrape runs.** From Claude Code, which drives Steven's logged-in Chrome through the Claude in Chrome extension and writes the file into the month's transactions folder itself. The Chrome side panel cannot write to disk, so it is only the fallback: it offers the file as a download and Steven moves it.
 12. **Schema version 2.** The importer accepts only version 2, so a file from the old prompt fails with the existing version error.
+13. **Where the scrape runs.** From Claude Code, which drives Steven's logged-in Chrome through the Claude in Chrome extension and writes the file into the month's transactions folder itself. The Chrome side panel cannot write to disk, so it is only the fallback: it offers the file as a download and Steven moves it.
 
 ### Schema version 2 (changes from version 1)
 
