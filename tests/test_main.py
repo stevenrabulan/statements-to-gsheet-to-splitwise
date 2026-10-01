@@ -654,3 +654,50 @@ def test_an_item_key_is_not_hidden_by_a_whole_foods_order_row_of_the_same_prefix
     rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")], existing_rows=existing,
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     assert [row[10] for row in _sheet_rows(wr)] == [AMAZON_NOTE]
+
+
+# --- Digital Orders --------------------------------------------------------------
+
+DIGITAL_NOTE = "split-transactions automation amazon D01-0000000-0000003"
+
+
+def _digital_file(month, charge_date="2026-09-09"):
+    f = month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps({
+        "schema_version": 2, "scraped_on": "2026-09-28",
+        "orders": [{
+            "kind": "digital", "order_number": "D01-0000000-0000003",
+            "charge_date": charge_date, "short_name": "Grocery Subscription",
+            "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+            "order_total": 9.99,
+        }],
+        "refunds": []}))
+    return f
+
+
+def test_digital_order_writes_one_plain_amount_row_with_the_key(amazon_month, tmp_path):
+    f = _digital_file(amazon_month)
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    [row] = _sheet_rows(wr)
+    assert row[0] == "09/09/2026"
+    assert row[1] == 9.99
+    assert row[2] == "Grocery Subscription"
+    assert row[4] is True and row[7] is None
+    assert row[6] == "Amazon Card"
+    assert row[10] == DIGITAL_NOTE
+
+
+def test_rescrape_of_a_digital_order_writes_nothing(amazon_month, tmp_path):
+    f = _digital_file(amazon_month)
+    existing = [[46274, 9.99, "Grocery Subscription", "", False, "", "Amazon Card",
+                 "Both", "", "", DIGITAL_NOTE]]
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+
+
+def test_digital_order_charged_before_the_cutoff_is_not_written(amazon_month, tmp_path, capsys):
+    f = _digital_file(amazon_month, charge_date="2026-07-28")
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()
+    assert "'before 2026-07-29': 1" in capsys.readouterr().out

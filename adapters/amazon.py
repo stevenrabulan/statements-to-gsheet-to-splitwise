@@ -15,12 +15,11 @@ from models import AccountConfig, ImporterError, ParseResult, Transaction
 NAME = "amazon"
 SCHEMA_VERSION = 2
 
-# Every Order says what it is. Digital Orders are not imported yet; they are
-# counted as skipped under their CONTEXT.md name.
+# Every Order says what it is.
 _PHYSICAL = "physical"
 _WHOLE_FOODS = "whole_foods"
-_NOT_IMPORTED_YET = {"digital": "Digital Order"}
-_KINDS = {_PHYSICAL, _WHOLE_FOODS, *_NOT_IMPORTED_YET}
+_DIGITAL = "digital"
+_KINDS = {_PHYSICAL, _WHOLE_FOODS, _DIGITAL}
 WHOLE_FOODS_LABEL = "Whole Foods"
 
 GIFT_CARD_LABEL = "Amazon Gift Card"
@@ -31,7 +30,7 @@ CENT = Decimal("0.01")
 
 # Every Amazon row's Notes carry a stable key (spec, "Deduplication"):
 # "amazon <order number> #<position>" for an Item, "amazon <order number>" for a
-# Whole Foods Order, plus " refund <date> <amount>" on a Refund (the amount of
+# Whole Foods or Digital Order, plus " refund <date> <amount>" on a Refund (the amount of
 # that Item's part when one Refund covers several Items).
 # Matched as whole words, longest form first, so "#1" never matches "#10" and an
 # Order key never matches an Item key or a Refund key that starts with it.
@@ -103,8 +102,8 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     if not isinstance(kind, str) or kind not in _KINDS:
         raise ImporterError(
             f"amazon {where}: 'kind' must be one of {sorted(_KINDS)}, got {kind!r}")
-    if kind in _NOT_IMPORTED_YET:
-        result.skipped[f"{_NOT_IMPORTED_YET[kind]} (not imported yet)"] += 1
+    if kind == _DIGITAL:
+        _parse_digital(order, order_number, config, accounts, result)
         return
     order_date = _date(_get(order, "order_date", str, where), where)
     if kind == _WHOLE_FOODS:
@@ -193,6 +192,32 @@ def _parse_whole_foods(order, order_number: str, order_date: date, config, accou
     ))
 
 
+def _parse_digital(order, order_number: str, config, accounts, result: ParseResult) -> None:
+    """A Digital Order has nothing to ship, so it is one row, dated when it was
+    charged (decision 9). Its Amount is the amount Amazon shows, a plain number."""
+    where = f"order {order_number}"
+    charge_date = _date(_get(order, "charge_date", str, where), where)
+    cutoff = config.ignore_before
+    if cutoff is not None and charge_date < cutoff:
+        result.skipped[f"before {cutoff.isoformat()}"] += 1
+        return
+    short_name = _get(order, "short_name", str, where).strip()
+    if not short_name:
+        raise ImporterError(f"amazon {where}: short_name must not be empty")
+    total = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
+    account, warning = _payment_method(_get(order, "payment", list, where),
+                                       where, config, accounts)
+    if warning:
+        result.warnings.append(warning)
+    result.transactions.append(Transaction(
+        date=charge_date,
+        description=short_name,
+        amount=float(total),
+        account=account,
+        key=order_key(order_number),
+    ))
+
+
 def _lines(order, field: str, where: str) -> list[Decimal]:
     """The dollar amounts of the summary lines Amazon shows under `field`."""
     return [_money(_get(line, "amount", (int, Decimal), f"{where} {field}"), f"{where} {field}")
@@ -223,13 +248,12 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
     if order is not None and order["kind"] == _WHOLE_FOODS:
         _parse_whole_foods_refund(refund, order, positions, config, accounts, result)
         return
-    if order is not None and order["kind"] in _NOT_IMPORTED_YET:
-        label = _NOT_IMPORTED_YET[order["kind"]]
+    if order is not None and order["kind"] == _DIGITAL:
         amount, refund_date = _refund_amount_and_date(refund, order_where)
-        result.skipped[f"refund on {label} (not imported yet)"] += 1
+        result.skipped["refund on Digital Order"] += 1
         result.warnings.append(
             f"amazon {order_where}: Refund of {amount:.2f} on {refund_date.isoformat()} is on "
-            f"a {label}, which is not imported yet; Refund skipped")
+            f"a Digital Order, which has no Items to refund; Refund skipped, enter it by hand")
         return
     if order is None and not positions:
         # Only a Whole Foods Order has no positions, but this one is not in the file.

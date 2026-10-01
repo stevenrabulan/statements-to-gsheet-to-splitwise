@@ -287,22 +287,78 @@ def test_gift_card_payment_does_not_change_the_math(tmp_path):
     assert result.skipped["total mismatch"] == 0
 
 
-def test_digital_orders_are_skipped_and_counted(tmp_path):
-    other = {"kind": "digital", "order_number": "D01-0000000-0000050", "order_total": 9.99}
-    result = _parse(_write(tmp_path, _order(), other))
-    assert [t.key for t in result.transactions] == ["amazon 111-0000000-0000009 #1"]
-    assert result.skipped["Digital Order (not imported yet)"] == 1
+# --- Digital Orders --------------------------------------------------------------
+
+DIGITAL_NUMBER = "D01-0000000-0000050"
+
+
+def _digital(**overrides):
+    order = {
+        "kind": "digital", "order_number": DIGITAL_NUMBER, "charge_date": "2026-09-09",
+        "short_name": "Grocery Subscription",
+        "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+        "order_total": 9.99,
+    }
+    order.update(overrides)
+    return order
+
+
+def test_digital_order_is_one_plain_amount_row_dated_when_charged(tmp_path):
+    result = _parse(_write(tmp_path, _digital()))
+    [t] = result.transactions
+    assert t.date == date(2026, 9, 9)
+    assert t.description == "Grocery Subscription"
+    assert t.amount == 9.99
+    assert t.amount_formula is None
+    assert t.key == f"amazon {DIGITAL_NUMBER}"
+    assert t.account == "Amazon Card"
+    assert t.refunds is None and t.note_suffix == ""
+    assert result.warnings == []
+
+
+def test_digital_order_cutoff_compares_the_charge_date(tmp_path):
+    before = _digital(charge_date="2026-07-28")
+    on = _digital(charge_date="2026-07-29", order_number="D01-0000000-0000051")
+    result = _parse(_write(tmp_path, before, on))
+    assert [t.key for t in result.transactions] == ["amazon D01-0000000-0000051"]
+    assert result.skipped["before 2026-07-29"] == 1
+    assert result.warnings == []
+
+
+def test_digital_order_payment_method_follows_the_same_rules_as_items(tmp_path):
+    gift = _digital(payment=[{"type": "gift_card"}])
+    [t] = _parse(_write(tmp_path, gift)).transactions
+    assert t.account == "Amazon Gift Card"
+    odd = _digital(payment=[{"type": "card", "card_type": "Visa", "last_four": "9999"}])
+    result = _parse(_write(tmp_path, odd))
+    assert result.transactions[0].account == "Amazon"
+    assert "9999" in result.warnings[0]
+
+
+@pytest.mark.parametrize("field, value", [
+    ("charge_date", None), ("charge_date", "09/09/2026"), ("short_name", ""),
+    ("short_name", None), ("order_total", None), ("order_total", 9.999), ("order_total", "9.99"),
+    ("payment", []),
+])
+def test_digital_order_bad_fields_fail_loudly_naming_the_order(tmp_path, field, value):
+    with pytest.raises(ImporterError, match=DIGITAL_NUMBER):
+        _parse(_write(tmp_path, _digital(**{field: value})))
+
+
+def test_digital_order_is_not_held_for_shipping_and_needs_no_order_date(tmp_path):
+    order = _digital()
+    assert "order_date" not in order and "shipments" not in order
+    assert len(_parse(_write(tmp_path, order)).transactions) == 1
 
 
 def test_refund_on_a_digital_order_is_skipped_with_a_warning(tmp_path):
-    other = {"kind": "digital", "order_number": "D01-0000000-0000050", "order_total": 9.99}
-    result = _parse(_write(tmp_path, other,
-                           refunds=[_refund(4.99, order_number="D01-0000000-0000050")]))
-    assert result.transactions == []
-    assert result.skipped["refund on Digital Order (not imported yet)"] == 1
+    result = _parse(_write(tmp_path, _digital(),
+                           refunds=[_refund(4.99, order_number=DIGITAL_NUMBER, positions=[])]))
+    assert [t.key for t in result.transactions] == [f"amazon {DIGITAL_NUMBER}"]
+    assert result.skipped["refund on Digital Order"] == 1
     [warning] = result.warnings
-    assert "D01-0000000-0000050" in warning and "4.99" in warning
-    assert "Digital Order" in warning
+    assert DIGITAL_NUMBER in warning and "4.99" in warning
+    assert "Digital Order" in warning and "by hand" in warning
 
 
 # --- Whole Foods Orders ----------------------------------------------------------
