@@ -776,7 +776,7 @@ def test_unknown_ship_date_with_order_date_on_the_cutoff_imports_with_a_note(tmp
     assert "111-0000000-0000009" in warning
 
 
-def test_unknown_ship_date_with_order_date_before_the_cutoff_skips_the_order(tmp_path):
+def test_unknown_ship_date_with_order_date_before_the_cutoff_skips_the_item(tmp_path):
     order = _multi(10.00, _shipment_on(None, _item(1, 10.00, tax=0)), order_date="2026-07-28")
     order["shipments"][0]["shipped"] = True
     result = _parse(_write(tmp_path, order))
@@ -785,6 +785,22 @@ def test_unknown_ship_date_with_order_date_before_the_cutoff_skips_the_order(tmp
     assert result.skipped["before 2026-07-29"] == 0
     [warning] = result.warnings
     assert "111-0000000-0000009" in warning
+    assert "#1" in warning and "Item skipped" in warning
+
+
+def test_unknown_ship_date_skip_names_only_the_items_it_drops(tmp_path):
+    order = _multi(30.00,
+                   _shipment_on(None, _item(1, 10.00, tax=0), _item(2, 10.00, tax=0)),
+                   _shipment_on("2026-08-01", _item(3, 10.00, tax=0)),
+                   order_date="2026-07-20")
+    order["shipments"][0]["shipped"] = True
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["3"]
+    assert result.skipped["unknown ship date"] == 2
+    assert len(result.warnings) == 2
+    assert all("Item skipped" in w and "Order skipped" not in w for w in result.warnings)
+    assert ["#1" in w for w in result.warnings] == [True, False]
+    assert ["#2" in w for w in result.warnings] == [False, True]
 
 
 def test_known_ship_date_never_gets_the_note(tmp_path):

@@ -226,15 +226,14 @@ def _lines(order, field: str, where: str) -> list[Decimal]:
 
 def _count_before_cutoff(cost: "_ItemCost", cutoff: date, where: str, result: ParseResult) -> None:
     """Count an Item dropped by the cutoff. One that only fell back to the Order
-    Date is named in a warning, once per Order, since nothing else says why."""
+    Date is named in a warning, since nothing else says why."""
     if cost.ship_date_known:
         result.skipped[f"before {cutoff.isoformat()}"] += 1
         return
     result.skipped[UNKNOWN_SHIP_DATE] += 1
-    warning = (f"amazon {where}: ship date unknown and the Order Date is before the "
-               f"{cutoff.isoformat()} cutoff; Order skipped")
-    if warning not in result.warnings:
-        result.warnings.append(warning)
+    result.warnings.append(
+        f"amazon {where}: ship date unknown for #{cost.position}; Order Date "
+        f"{cost.shipped_on.isoformat()} is before the {cutoff.isoformat()} cutoff; Item skipped")
 
 
 def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -> None:

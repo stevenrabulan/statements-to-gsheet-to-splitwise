@@ -175,7 +175,7 @@ mv ~/Downloads/amazon-orders-2026-10-01.json transactions/2026-10/
 
 Amazon shows no "shipped" date. The scrape uses the date of the "Package left the shipper facility" tracking event, and leaves it blank when the tracking is gone. With no ship date, the **Order Date** stands in for the cutoff check only:
 - Order Date on or after the Cutoff Date: the Items import, each with a warning in the run output and ` (ship date unknown, Order Date used for cutoff)` after the key in Notes. Column A is the Order Date either way.
-- Order Date before the Cutoff Date: the Order is skipped (`unknown ship date`) with a warning.
+- Order Date before the Cutoff Date: the Items in that shipment are skipped (`unknown ship date`), each with a warning. Items in the Order's other shipments still import.
 
 #### Reading the dry-run summary
 
