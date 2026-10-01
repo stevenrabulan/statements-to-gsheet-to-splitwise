@@ -6,7 +6,7 @@
 
 **Status:** ready-for-human
 
-- [ ] Run the scrape prompt in logged-in Chrome. The file lands in this month's transactions folder.
+- [ ] Run the scrape prompt from Claude Code, driving logged-in Chrome. The file lands in this month's transactions folder without a download step.
 - [ ] Dry run: the summary lists Items since 2026-07-29 and all skipped reasons, and at least one multi-Item Order's formula matches its Amazon invoice.
 - [ ] Import a small real file. New Item rows show "For who" = All and "Send to Splitwise" ticked.
 - [ ] Whole Foods Orders and the Grocery Subscription each appear as one row, and a Whole Foods row's formula matches its Order page.
