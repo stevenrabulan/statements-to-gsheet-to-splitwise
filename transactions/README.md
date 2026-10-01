@@ -71,10 +71,10 @@ Some cards (FakeMart, for example) export your **entire** transaction history on
 
 | Setting         | Required | Description                                                                                      |
 | :----------------| :---------| :-------------------------------------------------------------------------------------------------|
-| `name`          | Yes      | The account label written to Column G — identical to the plain-string form.                      |
+| `name`          | Yes      | The account label written to Column G, the same as the plain-string form.                      |
 | `ignore_before` | No       | `YYYY-MM-DD`. Transactions dated **before** this day are dropped. The cutoff day itself is kept. |
 
-Dropped rows are reported in the per-file summary (e.g. `skipped={'before 2026-06-01': 25}`), so you can always see how many were filtered. The cutoff is applied before deduplication, and `--account` overrides the label only — it does not disable a matched account's cutoff.
+Dropped rows are reported in the per-file summary (e.g. `skipped={'before 2026-06-01': 25}`), so you can always see how many were filtered. The cutoff is applied before deduplication, and `--account` overrides the label only. It does not disable a matched account's cutoff.
 
 ### 3. Add Google Cloud Credentials
 1. Go to the [Google Cloud Console](https://console.cloud.google.com) and create a project.
@@ -129,39 +129,78 @@ Add an Amazon entry to `accounts.json` (see `accounts.example.json`):
 | :----------------| :---------------------------------------------------------------------------------------------------------------------------------------------|
 | key             | Must be contained in the scraped filename. `amazon-orders` matches `amazon-orders-2026-09-28.json`.                                          |
 | `name`          | Fallback Payment Method (Column G), used only when an Order's card last four digits match no other `accounts.json` key (a warning is shown). |
-| `ignore_before` | The **Cutoff Date**. Items whose shipment **ship date** is before it are ignored (Orders before it were recorded as Charge rows). Compared with the ship date, not the Order Date. |
+| `ignore_before` | The **Cutoff Date**. Items whose shipment **ship date** is before it are ignored (Orders before it were recorded as Charge rows). Compared with the ship date, not the Order Date (see "What gets a row"). |
 
 Payment Method is set from the card on the Order: its last four digits are matched against `accounts.json` keys that contain them (e.g. key `Chase1111` for a card ending 1111). Gift card only gives "Amazon Gift Card", points only gives "Points", gift card plus card gives the card.
 
 ### 2. Scrape, then import (once per billing cycle)
 
-1. Open Chrome, logged in to Amazon, with the Claude in Chrome extension.
-2. Paste the prompt from `scrape-amazon-orders.md`. It reads the last 90 days of Orders and saves `amazon-orders-<run date>.json` into the current month's folder, e.g. `transactions/2026-09/`. It records raw facts only and calculates nothing.
-3. Preview, then import (same commands as cards; the folder import picks up `.json` alongside CSVs and PDFs):
+The scrape runs from **Claude Code**, which drives your logged-in Chrome through the Claude in Chrome extension and writes the file straight into the month's folder.
+
+1. Open Chrome, logged in to your own Amazon account, with the Claude in Chrome extension connected.
+2. Start Claude Code in this repo and tell it to follow `scrape-amazon-orders.md`.
+3. It walks the last 90 days of the Orders list, reads the Digital Orders tab, and saves `amazon-orders-<run date>.json` into the current month's folder, e.g. `transactions/2026-10/`. It records what Amazon shows and calculates nothing.
+4. In the same session it runs the dry run, `.venv/bin/python main.py transactions/2026-10/ --dry-run`, and reports the file's path, the counts, anything it could not read, and every warning.
+5. Read the dry-run report. When it looks right, import (same command without `--dry-run`; the folder import picks up `.json` alongside CSVs and PDFs):
 
 ```bash
-.venv/bin/python main.py transactions/2026-09/ --dry-run
-.venv/bin/python main.py transactions/2026-09/
+.venv/bin/python main.py transactions/2026-10/
 ```
 
 The importer calculates each Item's Loaded Cost (price, minus Promos, plus tax, plus shipping and whole-Order discount shares) and writes it as a formula in Amount, e.g. `=2*12.99-3+1.81+0.42`. `--dry-run`, `--from`/`--to`, `--force`, and the import log work as for cards.
 
-The dry-run summary counts Items left out:
-- `not ready`: an Order with a non-cancelled Item not shipped yet. It is picked up on a later scrape.
-- `total mismatch`: calculated costs did not equal Amazon's Order total. The Order is skipped with a warning naming the expected and calculated totals.
-- cutoff: Items shipped before the Cutoff Date.
+**If the Chrome connection fails:** open the Claude in Chrome side panel in the logged-in window, paste the prompt from `scrape-amazon-orders.md` (everything under "Prompt"), and ask it to offer the file as a download named `amazon-orders-<run date>.json`. The side panel cannot write into the repo. Move the download into the month's folder with one command, then run the dry run:
 
-Rows are deduplicated by a key in Notes (Column K): `split-transactions automation amazon <order number> #<position>`. Re-scraping never duplicates rows.
+```bash
+mv ~/Downloads/amazon-orders-2026-10-01.json transactions/2026-10/
+.venv/bin/python main.py transactions/2026-10/ --dry-run
+```
 
-Returns and partial refunds arrive on a later scrape as **negative rows** dated on the refund date. They copy "Send to Splitwise" and "For who" from the original Item row. A Refund on an Order shipped before the Cutoff Date is skipped with a warning (enter it by hand).
+#### What gets a row
 
-### 3. The card filter
+| Amazon Order | Rows | Date (Column A) | Cutoff compared with |
+| :--- | :--- | :--- | :--- |
+| Physical Order | one per Item | Order Date | the shipment's ship date |
+| Whole Foods Order | one for the whole Order, named `Whole Foods` | Order Date | Order Date |
+| Digital Order (Digital Orders tab, e.g. `Grocery Subscription`) | one, named for what was bought | date charged | date charged |
 
-When importing any card or bank CSV or PDF, Charges (and refund credits) starting with `Amazon.com*`, `AMAZON MKTPL*`, or `AMZN Mktp*` are dropped so Amazon Orders are counted once. The per-file summary shows them as `amazon order charge`. Whole Foods, Prime, Prime Video, Kindle, and Audible Charges still import from the card CSV.
+- **Whole Foods:** Amount is a formula of the summary lines Amazon shows, e.g. `=106.99+7` (subtotal plus driver tip). It must equal the Order Total or the Order is skipped with a warning. It is imported once delivered. The scrape finds these by walking the Orders list, because the search box skips them.
+- **Digital Orders:** Amount is the amount Amazon shows. The card comes from each Order's details page.
+- **Order Total** is the total before any gift card or points, not the "Grand Total" after them. How an Order was paid never changes its cost.
+- **Only your own account** is read. Orders from another account are never recorded.
 
-### 4. Classify Items in the sheet
+#### Unknown ship date
 
-New Item rows default to **Shared** (Column E "Send to Splitwise" ticked, "For who" as card rows get). After importing:
+Amazon shows no "shipped" date. The scrape uses the date of the "Package left the shipper facility" tracking event, and leaves it blank when the tracking is gone. With no ship date, the **Order Date** stands in for the cutoff check only:
+- Order Date on or after the Cutoff Date: the Items import, each with a warning in the run output and ` (ship date unknown, Order Date used for cutoff)` after the key in Notes. Column A is the Order Date either way.
+- Order Date before the Cutoff Date: the Order is skipped (`unknown ship date`) with a warning.
+
+#### Reading the dry-run summary
+
+The summary counts what the import left out:
+- `not ready`: an Order with a non-cancelled Item not shipped yet (or a Whole Foods Order not delivered). It is picked up on a later scrape.
+- `total mismatch`: calculated costs did not equal the Order Total. The Order is skipped with a warning naming the expected and calculated totals.
+- `before <Cutoff Date>`: Items (or Whole Foods and Digital Orders) dated before the Cutoff Date.
+- `unknown ship date`: see above.
+- `refund before <Cutoff Date>`, `refund without item`, `refund on Digital Order`: a Refund left out, with a warning naming the Order and amount. Enter it by hand.
+
+Warnings to expect: a coupon Amazon shows with no Items it applies to is spread across every Item as a discount (a warning names the Order and amount); a card that matches no `accounts.json` key falls back to the Amazon entry's name.
+
+#### Keys and Refunds
+
+Rows are deduplicated by a key in Notes (Column K): `split-transactions automation amazon <order number> #<position>` for an Item, `split-transactions automation amazon <order number>` for a Whole Foods or Digital Order. Re-scraping never duplicates rows.
+
+Returns and partial refunds arrive on a later scrape as **negative rows** dated on the refund date. They copy "Send to Splitwise" and "For who" from the original row. One Refund that covers several Items becomes one negative row per Item, split in proportion to their Loaded Costs. A Whole Foods Refund is one negative row, `Refund: Whole Foods`. A Refund on a Digital Order is skipped (enter it by hand).
+
+### 3. What is not imported from Amazon
+
+- **The Amazon card is no longer imported.** Do not import its CSV for Amazon spending: Orders, Whole Foods, and Digital Orders come from the scrape.
+- **Enter by hand:** the **Prime fee** (yearly; Amazon shows no charge history for it) and **Audible** (separate sign-in).
+- **Safety net:** when importing any other card or bank CSV or PDF, Charges (and refund credits) starting with `Amazon.com*`, `AMAZON MKTPL*`, or `AMZN Mktp*` are still dropped, so Orders are counted once. The per-file summary shows them as `amazon order charge`.
+
+### 4. Classify rows in the sheet
+
+New Amazon rows default to **Shared** (Column E "Send to Splitwise" ticked, "For who" as card rows get). After importing:
 - **Personal** Item: untick "Send to Splitwise" (E). The row stays recorded so you can reclassify later.
 - **Partner's** Item: set "For who" (H) to Partner.
 

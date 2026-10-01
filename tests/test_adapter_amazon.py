@@ -965,3 +965,50 @@ def test_the_old_single_position_field_is_rejected(tmp_path):
            "amount": 5.00, "refund_date": "2026-08-20"}
     with pytest.raises(ImporterError, match="111-0000000-0000009.*positions"):
         _parse(_write(tmp_path, _order(), refunds=[old]))
+
+
+# The scrape prompt's example file is the contract the scraper is shown, so it
+# must be a file the importer accepts, and it must show every shape.
+PROMPT = Path(__file__).parent.parent / "scrape-amazon-orders.md"
+EXAMPLE_HEADING = "### File format (schema version 2)"
+
+
+def _prompt_example(tmp_path) -> Path:
+    text = PROMPT.read_text()
+    after = text.split(EXAMPLE_HEADING, 1)[1]
+    block = after.split("```json\n", 1)[1].split("\n```", 1)[0]
+    f = tmp_path / "amazon-orders-2026-10-01.json"
+    f.write_text(block)
+    return f
+
+
+def test_the_scrape_prompt_example_parses_with_the_importer(tmp_path):
+    result = _parse(_prompt_example(tmp_path))
+    rows = {t.key: t for t in result.transactions}
+    assert len(result.transactions) == len(rows) == 10
+    assert dict(result.skipped) == {}
+
+    # Physical Order with per-shipment tax, an Item-targeted Promo and a refund covering two Items.
+    assert rows["amazon 111-0000000-0000001 #1"].amount_formula.startswith("=2*12.99-3+")
+    assert {k for k, t in rows.items()
+            if k.startswith("amazon 111-0000000-0000001 #") and not t.refunds} == {
+        f"amazon 111-0000000-0000001 #{n}" for n in (1, 2, 3)}
+    refunds = [t for t in result.transactions if t.refunds]
+    assert sorted(t.refunds for t in refunds) == [
+        "amazon 111-0000000-0000001 #2", "amazon 111-0000000-0000001 #3",
+        "amazon 111-0000000-0000002"]
+    assert sum(t.amount for t in refunds if t.refunds.endswith(("#2", "#3"))) == pytest.approx(-17.50)
+
+    # Order-level tax, a null ship date and a coupon with no targets.
+    assert rows["amazon 111-0000000-0000004 #1"].note_suffix == amazon.UNKNOWN_SHIP_DATE_NOTE
+    assert any("coupon of 1.48" in w for w in result.warnings)
+    assert sum(t.amount for k, t in rows.items()
+               if k.startswith("amazon 111-0000000-0000004 #")) == pytest.approx(26.18)
+
+    # Whole Foods Order (one row, formula of the summary lines) and a Digital Order.
+    assert rows["amazon 111-0000000-0000002"].description == "Whole Foods"
+    assert rows["amazon 111-0000000-0000002"].amount_formula == "=106.99+7-3"
+    digital = rows["amazon D01-0000000-0000003"]
+    assert (digital.description, digital.date, digital.amount) == (
+        "Grocery Subscription", date(2026, 9, 9), 9.99)
+    assert all(t.account == "Amazon Card" for t in result.transactions)
