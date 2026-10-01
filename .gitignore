@@ -11,6 +11,5 @@ __pycache__/
 
 .worktrees/
 import_log.json
-transactions/*
-!transactions/README.md
+transactions/
 .DS_Store

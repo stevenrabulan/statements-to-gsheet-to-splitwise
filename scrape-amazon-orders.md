@@ -1,6 +1,6 @@
 # Scrape Amazon Orders
 
-Prompt for an agent in Claude Code. Steven runs it by hand once per billing cycle, from this repo, with Chrome open and logged in to Amazon. Claude Code drives that Chrome through the Claude in Chrome extension and writes the file itself into `transactions/<YYYY-MM>/`. The importer (`main.py`) does all the math. The README (`transactions/README.md`) has the steps for Steven and the fallback for when the Chrome connection fails.
+Prompt for an agent in Claude Code. Steven runs it by hand once per billing cycle, from this repo, with Chrome open and logged in to Amazon. Claude Code drives that Chrome through the Claude in Chrome extension and writes the file itself into `transactions/<YYYY-MM>/`. The importer (`main.py`) does all the math. The README (`README.md`) has the steps for Steven and the fallback for when the Chrome connection fails.
 
 ---
 

@@ -1,6 +1,8 @@
-# transactions/
+# Split Transactions
 
-Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon Orders as JSON) here to organize and import them. Everything in this folder is **gitignored** except this README. Real financial records are never committed to version control.
+Turns spending from bank, card, and Amazon order data into rows on the "Split payments" sheet, which feeds Splitwise.
+
+Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon Orders as JSON) into `transactions/` to organize and import them. Everything in that folder is **gitignored**. Real financial records are never committed to version control.
 
 (Synthetic test data lives separately under `tests/fixtures/` and is safe to commit.)
 
@@ -8,7 +10,7 @@ Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon O
 
 ## Layout: One Folder per Month
 
-To keep files organized, create a subfolder for each month:
+To keep files organized, create `transactions/` in the project root (a fresh clone does not have it) with a subfolder for each month:
 
 ```
 transactions/
