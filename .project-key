@@ -8,7 +8,7 @@
 #
 # How it is used: agents read this file to work out which project a session
 # belongs to. For example, a session that implements ticket 6 here gets named
-# "SPLT 6: Amazon Item Splits", so it is easy to spot in a list of sessions
+# "SPLT-6: Amazon Item Splits", so it is easy to spot in a list of sessions
 # sorted by date instead of by project.
 #
 # Format: the first line that is not blank and does not start with "#" is the
