@@ -12,3 +12,7 @@ Amazon card Charges don't name what was bought, and Amazon posts one Charge per 
 - Nothing reconciles Order totals against card Charges any more. Correctness depends on the scrape and on the per-Order total check in ADR 0002. Steven chose not to build a Charge reconciliation because he no longer imports the Amazon card's Amazon Charges.
 - Amazon Items that shipped before the Cutoff Date (2026-07-29) were recorded as Charge rows. Refunds against those Orders can't find an Item row and are skipped with a warning.
 - A card import that ever needs Amazon order Charges back would have to remove this filter.
+
+## Update 2026-09-30
+
+Steven no longer imports the Amazon card (Chase2222) at all. Whole Foods Orders (tip included) and Digital Orders such as the Grocery Subscription now come from the scrape, one row per Order. The Prime fee and Audible are entered by hand, because Amazon shows no charge history for Prime and Audible needs a separate sign-in. The card-import filter stays as a safety net against an accidental import.

@@ -214,3 +214,79 @@ Amazon spending is recorded as **one sheet row per Item**, with its Loaded Cost 
 - **Risk:** the Item key uses the Item's position in the Order. If Amazon reorders Items between scrapes, a re-scrape could produce duplicate rows. The implementer should check that Amazon's Item order is stable across page loads and flag it if not.
 - The first run needs the 90-day window to reach back to the Cutoff Date (2026-07-29). A run in late September covers this.
 - Default classification relies on the sheet filling "For who" the same way it does for card rows today. The implementer should confirm this with one real dry run followed by one real import of a small file.
+
+## Addendum 2026-09-30: findings from the first real scrape
+
+The first real scrape (60 Orders, 2 Refunds) showed gaps between what Amazon displays and schema version 1. These decisions come from the grilling session that followed. New terms (Whole Foods Order, Digital Order, Order Total) are in `CONTEXT.md`. Where this addendum disagrees with the text above, the addendum wins.
+
+### Decisions
+
+1. **Tax shown only for the whole Order.** Multi-shipment Orders show one tax figure. The file records it on the Order. When a shipment's tax is `null`, the importer spreads the Order's tax across all the Order's non-cancelled Items in proportion to price after Promos (shipping not included in the weights).
+2. **Ship date.** Amazon shows no "Shipped" date. The scraper uses the date of the "Package left the shipper facility" tracking event, and `null` when tracking is gone.
+3. **Unknown ship date.** When a shipped shipment's ship date is `null`, the Order Date stands in for the cutoff comparison only. If the Order Date is on or after the Cutoff Date, the Items are imported. If it is before, the Order is skipped with the reason "unknown ship date" and a warning. Each imported row that used the fallback gets a warning in the run output and a Notes suffix after its key: ` (ship date unknown, Order Date used for cutoff)`. Column A is the Order Date either way.
+4. **Coupon with unknown targets.** A Promo with `positions: []` is treated as an Adjustment: spread across all Items in proportion to price after Promos, written in the formula's discount term, with a warning naming the Order and amount.
+5. **Order Total.** The total before any gift card or points are applied (the line above "Gift Card Amount"), not the "Grand Total" after it.
+6. **Refund covering several Items.** A Refund lists `positions`. The importer writes one negative row per Item, splitting the amount in proportion to the Items' Loaded Costs (leftover cent to the largest part). Each row copies its own Item's classification and has its own key.
+7. **Whole Foods Orders.** One row per Order, not per Item. Description `Whole Foods`, date is the Order Date, Amount is a formula of the summary lines Amazon shows (e.g. `=106.99+7` for subtotal plus driver tip) and must equal the Order Total, otherwise the Order is skipped with the "total mismatch" warning. Key `amazon <order number>` (no position). Imported once delivered. Cutoff compared with the Order Date. Defaults to Shared. Payment Method as for Items.
+8. **Whole Foods Refunds.** A Refund with `positions: []` on a Whole Foods Order becomes one negative row, `Refund: Whole Foods`, key `amazon <order number> refund <refund date> <amount>`, copying the Order row's "Send to Splitwise" and "For who".
+9. **Digital Orders.** The scrape reads the Digital Orders tab. One row per Digital Order: description is what was bought (e.g. `Grocery Subscription`), date is the charge date, Amount is the amount shown, key `amazon <order number>` (e.g. `amazon D01-...`), Payment Method from the card on its details page, cutoff compared with the charge date, defaults to Shared.
+10. **The Amazon card is no longer imported.** The card-import filter stays as a safety net. The Prime fee (yearly, no charge history shown) and Audible (separate sign-in) are entered by hand.
+11. **Scrape scope.** Only Steven's own account, never another account's Orders. Whole Foods Orders are found by walking the 90-day Orders list, not the search box.
+12. **Schema version 2.** The importer accepts only version 2, so a file from the old prompt fails with the existing version error.
+
+### Schema version 2 (changes from version 1)
+
+```json
+{
+  "schema_version": 2,
+  "scraped_on": "2026-09-30",
+  "orders": [
+    {
+      "kind": "physical",
+      "order_number": "111-0000000-0000001",
+      "order_date": "2026-08-03",
+      "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+      "order_total": 30.95,
+      "tax": 2.68,
+      "shipping": 0,
+      "discounts": [],
+      "promos": [{"name": "Coupon", "amount": 1.48, "positions": []}],
+      "shipments": [{"shipped": true, "ship_date": null, "tax": null, "shipping": null, "items": []}]
+    },
+    {
+      "kind": "whole_foods",
+      "order_number": "111-0000000-0000002",
+      "order_date": "2026-09-11",
+      "delivered": true,
+      "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+      "order_total": 113.99,
+      "charges": [{"name": "Subtotal", "amount": 106.99}, {"name": "Driver tip", "amount": 7.00}],
+      "discounts": []
+    },
+    {
+      "kind": "digital",
+      "order_number": "D01-0000000-0000003",
+      "charge_date": "2026-09-09",
+      "short_name": "Grocery Subscription",
+      "payment": [{"type": "card", "card_type": "Visa", "last_four": "4242"}],
+      "order_total": 9.99
+    }
+  ],
+  "refunds": [
+    {"order_number": "111-0000000-0000001", "positions": [5, 6], "amount": 27.04, "refund_date": "2026-08-11"},
+    {"order_number": "111-0000000-0000002", "positions": [], "amount": 4.99, "refund_date": "2026-09-12"}
+  ]
+}
+```
+
+- `kind` is `physical`, `whole_foods`, or `digital`. Required on every Order.
+- `tax` on a physical Order is the Order-level tax, or `null` when Amazon shows tax per shipment. A shipment's `tax` may now be `null`. If both are `null`, the Order's tax is taken as 0 and the total check decides.
+- A shipped shipment's `ship_date` may be `null`.
+- `positions` replaces `position` on a Refund. It is `[]` only for a Whole Foods Order.
+- Whole Foods `charges` are the summary lines Amazon shows that add to the total, and `discounts` the lines that reduce it. The Order Total line itself is not listed in either.
+
+### Changes to earlier sections
+
+- User story 42 and the "Card import filter" note about Whole Foods and digital Charges importing from the card no longer describe the workflow (decision 10).
+- Out of Scope: "Digital Orders ... stay as card Charge rows" is replaced by decision 9. "Item-level detail for Whole Foods" stays out of scope (decision 7 records the Order, not its Items).
+- Seam 1 gains cases for decisions 1, 3, 4, 6, 7, 8, and 9. Seam 2 gains: a Whole Foods Refund copies the Order row's classification, and a re-scrape of Whole Foods and Digital Orders writes nothing.
