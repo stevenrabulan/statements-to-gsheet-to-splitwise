@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The importer accepts only `schema_version` 2. A version 1 file fails with the existing version error.
 - [ ] Every Order needs `kind`. An unknown or missing `kind` is an error naming the Order.
