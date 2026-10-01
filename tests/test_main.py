@@ -441,3 +441,31 @@ def test_refund_already_in_the_sheet_does_not_warn_when_its_item_row_is_gone(
                   log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
     wr.assert_not_called()
     assert "refund without item row" not in capsys.readouterr().out
+
+
+def _amazon_file_without_ship_date(amazon_month, order_date):
+    src = json.loads(AMAZON_FIXTURE.read_text())
+    src["orders"][0]["order_date"] = order_date
+    src["orders"][0]["shipments"][0]["ship_date"] = None
+    f = amazon_month / "amazon-orders-2026-09-28.json"
+    f.write_text(json.dumps(src))
+    return f
+
+
+def test_unknown_ship_date_row_notes_say_so_and_a_rescrape_writes_nothing(amazon_month, tmp_path, capsys):
+    f = _amazon_file_without_ship_date(amazon_month, "2026-08-03")
+    rd, wr = _run([str(f)], log_path=tmp_path / "log.json", accounts_map=AMAZON_ACCOUNTS)
+    assert [row[10] for row in _sheet_rows(wr)] == [
+        AMAZON_NOTE + " (ship date unknown, Order Date used for cutoff)"]
+    assert "111-0000000-0000001" in capsys.readouterr().out
+
+    # The sheet now holds that row; a re-scrape must recognise it by its key.
+    existing = [[46237, 14.07, "Trash bags", "", True, "", "Amazon Card", "", "", "",
+                 "split-transactions automation amazon 111-0000000-0000001 #1"
+                 " (ship date unknown, Order Date used for cutoff)"]]
+    rescrape = json.loads(f.read_text())
+    rescrape["scraped_on"] = "2026-09-29"
+    f.write_text(json.dumps(rescrape))
+    rd, wr = _run([str(f)], existing_rows=existing,
+                  log_path=tmp_path / "log2.json", accounts_map=AMAZON_ACCOUNTS)
+    wr.assert_not_called()

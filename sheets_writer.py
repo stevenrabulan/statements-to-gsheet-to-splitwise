@@ -36,7 +36,7 @@ def build_row(txn: Transaction) -> list:
         txn.for_who,
         None,
         None,
-        _k_note(txn.key or txn.source_file),
+        _k_note((txn.key + txn.note_suffix) if txn.key else txn.source_file),
     ]
 
 

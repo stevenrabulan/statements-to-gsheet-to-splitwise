@@ -36,6 +36,10 @@ KEY_PATTERN = re.compile(rf"(?<!\S){_ITEM_KEY}(?: refund \S+ \S+)?(?!\S)")
 # Fullmatched against a KEY_PATTERN match: an Item's key, not a Refund's.
 ITEM_KEY_PATTERN = re.compile(_ITEM_KEY)
 
+# Added after the key in Notes when the ship date was unknown (spec addendum, decision 3).
+UNKNOWN_SHIP_DATE_NOTE = " (ship date unknown, Order Date used for cutoff)"
+UNKNOWN_SHIP_DATE = "unknown ship date"
+
 
 def item_key(order_number: str, position: int) -> str:
     return f"amazon {order_number} #{position}"
@@ -104,7 +108,8 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     cutoff = config.ignore_before
     if cutoff is not None and all(c.shipped_on < cutoff for c in costs):
         # Recorded as Charge rows already; its totals are not our concern.
-        result.skipped[f"before {cutoff.isoformat()}"] += len(costs)
+        for cost in costs:
+            _count_before_cutoff(cost, cutoff, where, result)
         return
     expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
     calculated = sum((c.loaded for c in costs), Decimal(0))
@@ -121,9 +126,26 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         result.warnings.append(warning)
     for cost in costs:
         if cutoff is not None and cost.shipped_on < cutoff:
-            result.skipped[f"before {cutoff.isoformat()}"] += 1
+            _count_before_cutoff(cost, cutoff, where, result)
             continue
+        if not cost.ship_date_known:
+            result.warnings.append(
+                f"amazon {where}: ship date unknown for #{cost.position}; Order Date "
+                f"{order_date.isoformat()} used for the cutoff")
         result.transactions.append(_item_row(cost, order_number, order_date, account))
+
+
+def _count_before_cutoff(cost: "_ItemCost", cutoff: date, where: str, result: ParseResult) -> None:
+    """Count an Item dropped by the cutoff. One that only fell back to the Order
+    Date is named in a warning, once per Order, since nothing else says why."""
+    if cost.ship_date_known:
+        result.skipped[f"before {cutoff.isoformat()}"] += 1
+        return
+    result.skipped[UNKNOWN_SHIP_DATE] += 1
+    warning = (f"amazon {where}: ship date unknown and the Order Date is before the "
+               f"{cutoff.isoformat()} cutoff; Order skipped")
+    if warning not in result.warnings:
+        result.warnings.append(warning)
 
 
 def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -> None:
@@ -152,14 +174,15 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
         result.warnings.append(f"amazon {where}: {what} matches no shipped Item in this file; "
                                f"Refund skipped, enter it by hand")
         return
-    short_name, shipped_on = found
+    short_name, shipped_on, known = found
     cutoff = config.ignore_before
     if cutoff is not None and shipped_on < cutoff:
         # The Item is a Charge row from before Item rows existed.
         result.skipped[f"refund before {cutoff.isoformat()}"] += 1
-        result.warnings.append(f"amazon {where}: {what} is for an Item shipped "
-                               f"{shipped_on.isoformat()}, before the {cutoff.isoformat()} "
-                               f"cutoff; Refund skipped, enter it by hand")
+        how = (f"shipped {shipped_on.isoformat()}" if known
+               else f"with no ship date, ordered {shipped_on.isoformat()}")
+        result.warnings.append(f"amazon {where}: {what} is for an Item {how}, before the "
+                               f"{cutoff.isoformat()} cutoff; Refund skipped, enter it by hand")
         return
 
     account, warning = _payment_method(_get(order, "payment", list, f"order {order_number}"),
@@ -177,17 +200,26 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
     ))
 
 
-def _shipped_item(order, position: int, where: str) -> tuple[str, date] | None:
-    """(short name, ship date) of the Order's shipped, non-cancelled Item at
-    `position`, or None when there is no such Item."""
+def _shipped_item(order, position: int, where: str) -> tuple[str, date, bool] | None:
+    """(short name, cutoff date, whether it is a real ship date) of the Order's
+    shipped, non-cancelled Item at `position`, or None when there is no such Item.
+    With no ship date the Order Date is the cutoff date."""
     for shipment in _get(order, "shipments", list, where):
         if shipment.get("shipped") is not True:
             continue
         for item in _live_items(shipment, where):
             if item.get("position") == position:
-                return (_get(item, "short_name", str, where).strip(),
-                        _date(_get(shipment, "ship_date", str, where), where))
+                shipped_on, known = _ship_date(shipment, order, where)
+                return (_get(item, "short_name", str, where).strip(), shipped_on, known)
     return None
+
+
+def _ship_date(shipment, order, where: str) -> tuple[date, bool]:
+    """(date the cutoff compares, whether it is the real ship date). A shipped
+    shipment with no ship date stands in the Order Date."""
+    if shipment.get("ship_date") is None:
+        return _date(_get(order, "order_date", str, where), where), False
+    return _date(_get(shipment, "ship_date", str, where), where), True
 
 
 def _live_items(shipment, where: str) -> list:
@@ -215,7 +247,8 @@ class _ItemCost:
     unit_price: Decimal
     line: Decimal
     own_tax: Decimal | None      # Amazon's per-Item tax, when shown
-    shipped_on: date             # its shipment's ship date; the cutoff compares this
+    shipped_on: date             # its shipment's ship date (else the Order Date); the cutoff compares this
+    ship_date_known: bool = True
     promo: Decimal = Decimal(0)
     tax: Decimal = Decimal(0)
     shipping: Decimal = Decimal(0)
@@ -236,8 +269,8 @@ def _loaded_costs(order, shipments, where) -> list[_ItemCost]:
     groups = []     # [(shipment, [_ItemCost])], so shipment-scope spreads know their Items
     for shipment in shipments:
         live = _live_items(shipment, where)
-        shipped_on = _date(_get(shipment, "ship_date", str, where), where) if live else None
-        costs = [_item_cost(item, where, shipped_on) for item in live]
+        shipped_on, known = _ship_date(shipment, order, where) if live else (None, True)
+        costs = [_item_cost(item, where, shipped_on, known) for item in live]
         groups.append((shipment, costs))
     costs = [c for _, group in groups for c in group]
 
@@ -308,7 +341,7 @@ def _cancelled(item, where: str) -> bool:
     return flag
 
 
-def _item_cost(item, order_where, shipped_on: date) -> _ItemCost:
+def _item_cost(item, order_where, shipped_on: date, ship_date_known: bool) -> _ItemCost:
     position = _get(item, "position", int, order_where)
     where = f"{order_where} #{position}"
     short_name = _get(item, "short_name", str, where).strip()
@@ -321,7 +354,7 @@ def _item_cost(item, order_where, shipped_on: date) -> _ItemCost:
     own_tax = (None if item.get("tax") is None
                else _money(item["tax"], f"{where} tax"))
     return _ItemCost(position, short_name, quantity, unit_price, quantity * unit_price,
-                     own_tax, shipped_on)
+                     own_tax, shipped_on, ship_date_known)
 
 
 def _spread(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
@@ -359,6 +392,7 @@ def _item_row(cost: _ItemCost, order_number: str, order_date: date, account: str
         account=account,
         amount_formula=f"={formula}",
         key=item_key(order_number, cost.position),
+        note_suffix="" if cost.ship_date_known else UNKNOWN_SHIP_DATE_NOTE,
     )
 
 

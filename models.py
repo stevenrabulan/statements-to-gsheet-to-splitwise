@@ -19,6 +19,7 @@ class Transaction:
     key: str | None = None                 # stable dedup key, written to column K
     send_to_splitwise: bool | None = None  # column E; None = the default (ticked)
     for_who: str | None = None             # column H; None = left for the sheet to fill
+    note_suffix: str = ""                  # text after the key in column K
     refunds: str | None = None             # Refund rows only: the refunded Item's key
 
 

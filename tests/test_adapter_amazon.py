@@ -566,3 +566,65 @@ def test_refund_amount_must_be_positive_cents(tmp_path, amount):
 def test_order_listed_twice_fails_loudly(tmp_path):
     with pytest.raises(ImporterError, match="111-0000000-0000009.*twice"):
         _parse(_write(tmp_path, _order(), _order()))
+
+
+UNKNOWN_SHIP_NOTE = " (ship date unknown, Order Date used for cutoff)"
+
+
+def test_unknown_ship_date_with_order_date_on_the_cutoff_imports_with_a_note(tmp_path):
+    order = _multi(10.00, _shipment_on(None, _item(1, 10.00, tax=0)), order_date="2026-07-29")
+    for shipment in order["shipments"]:
+        shipment["shipped"] = True
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["1"]
+    assert rows["1"].key == "amazon 111-0000000-0000009 #1"
+    assert rows["1"].note_suffix == UNKNOWN_SHIP_NOTE
+    assert rows["1"].date == date(2026, 7, 29)
+    [warning] = result.warnings
+    assert "111-0000000-0000009" in warning
+
+
+def test_unknown_ship_date_with_order_date_before_the_cutoff_skips_the_order(tmp_path):
+    order = _multi(10.00, _shipment_on(None, _item(1, 10.00, tax=0)), order_date="2026-07-28")
+    order["shipments"][0]["shipped"] = True
+    result = _parse(_write(tmp_path, order))
+    assert result.transactions == []
+    assert result.skipped["unknown ship date"] == 1
+    assert result.skipped["before 2026-07-29"] == 0
+    [warning] = result.warnings
+    assert "111-0000000-0000009" in warning
+
+
+def test_known_ship_date_never_gets_the_note(tmp_path):
+    _, rows = _rows(tmp_path, _multi(10.00, _shipment_on("2026-08-02", _item(1, 10.00, tax=0))))
+    assert rows["1"].note_suffix == ""
+
+
+def test_only_the_shipment_without_a_ship_date_falls_back(tmp_path):
+    order = _multi(20.00,
+                   _shipment_on("2026-07-20", _item(1, 10.00, tax=0)),
+                   _shipment_on(None, _item(2, 10.00, tax=0)),
+                   order_date="2026-08-01")
+    order["shipments"][1]["shipped"] = True
+    result, rows = _rows(tmp_path, order)
+    assert list(rows) == ["2"]
+    assert rows["2"].note_suffix == UNKNOWN_SHIP_NOTE
+    assert result.skipped["before 2026-07-29"] == 1
+    assert len(result.warnings) == 1
+
+
+def test_refund_on_an_item_with_no_ship_date_uses_the_order_date(tmp_path):
+    order = _multi(10.00, _shipment_on(None, _item(1, 10.00, tax=0)), order_date="2026-08-01")
+    order["shipments"][0]["shipped"] = True
+    result = _parse(_write(tmp_path, order, refunds=[_refund(4.25, "2026-08-20")]))
+    [refund] = _refund_rows(result)
+    assert refund.amount == -4.25
+
+
+def test_refund_on_an_item_with_no_ship_date_and_an_old_order_date_is_skipped(tmp_path):
+    order = _multi(10.00, _shipment_on(None, _item(1, 10.00, tax=0)), order_date="2026-07-20")
+    order["shipments"][0]["shipped"] = True
+    result = _parse(_write(tmp_path, order, refunds=[_refund(4.25, "2026-08-20")]))
+    assert result.transactions == []
+    assert result.skipped["refund before 2026-07-29"] == 1
+    assert any("4.25" in w and "111-0000000-0000009" in w for w in result.warnings)
