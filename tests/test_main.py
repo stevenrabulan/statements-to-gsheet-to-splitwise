@@ -259,7 +259,7 @@ def test_rescrape_of_imported_item_writes_nothing_even_if_amount_moved(amazon_mo
 
 
 def test_amazon_key_match_is_exact_not_a_prefix(amazon_month, tmp_path):
-    # A second line with the same ASIN has the first one's key as a prefix; it must not hide it.
+    # A second Item with the same ASIN has the first one's key as a prefix; it must not hide it.
     existing = [[46237, 5.00, "Other", "", True, "", "Amazon Card", "", "", "",
                  "split-transactions automation amazon 111-0000000-0000001 B0FAKE0001#2"]]
     rd, wr = _run([str(amazon_month / "amazon-orders-2026-09-28.json")], existing_rows=existing,

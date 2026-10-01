@@ -34,10 +34,12 @@ CENT = Decimal("0.01")
 # Whole Foods or Digital Order, plus " refund <date> <amount>" on a Refund (the amount of
 # that Item's part when one Refund covers several Items). The ASIN, not the
 # Item's position, because Amazon reorders an Order's Items between page loads
-# (ticket 17). An ASIN on a second line of the same Order is "<ASIN>#2".
+# (ticket 17). A second Item with the same ASIN in one Order is "<ASIN>#2".
 # Matched as whole words, longest form first, so an ASIN never matches its "#2"
 # and an Order key never matches an Item key or a Refund key that starts with it.
-_ASIN = r"[A-Z0-9]{10}"
+# An ASIN is "B0" plus 8 capital letters or digits, or a book's 10-character ISBN.
+# The narrow shape keeps a word typed after an Order key from reading as one.
+_ASIN = r"(?:B0[A-Z0-9]{8}|\d{9}[\dX])"
 _ROW_KEY = rf"amazon \S+(?: {_ASIN}(?:#\d+)?)?"
 KEY_PATTERN = re.compile(rf"(?<!\S){_ROW_KEY}(?: refund \S+ \S+)?(?!\S)")
 # Fullmatched against a KEY_PATTERN match: the key of a row that Refunds point
@@ -49,8 +51,8 @@ UNKNOWN_SHIP_DATE_NOTE = " (ship date unknown, Order Date used for cutoff)"
 UNKNOWN_SHIP_DATE = "unknown ship date"
 
 
-def item_key(order_number: str, asin: str, occurrence: int = 1) -> str:
-    """`occurrence` counts the Order's lines with this ASIN, from 1."""
+def item_key(order_number: str, asin: str, occurrence: int) -> str:
+    """`occurrence` counts the Order's Items with this ASIN, from 1."""
     suffix = "" if occurrence == 1 else f"#{occurrence}"
     return f"amazon {order_number} {asin}{suffix}"
 
@@ -117,7 +119,7 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         return
     shipments = _get(order, "shipments", list, where)
     _check_positions(shipments, where)
-    keys = _item_keys(order, where)
+    keys = _item_keys(order_number, shipments, where)
 
     if not _ready(shipments, where):
         result.skipped["not ready"] += sum(len(_live_items(sh, where)) for sh in shipments)
@@ -315,7 +317,7 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
                                        order_where, config, accounts)
     if warning and warning not in result.warnings:
         result.warnings.append(warning)
-    keys = _item_keys(order, order_where)
+    keys = _item_keys(order_number, _get(order, "shipments", list, order_where), order_where)
     for position, (short_name, _, _), part in zip(positions, found, parts):
         if not part:
             continue    # a share too small to be a cent is not a row
@@ -421,25 +423,29 @@ def _ship_date(shipment, order, where: str) -> tuple[date, bool]:
     return _date(_get(shipment, "ship_date", str, where), where), True
 
 
-def _item_keys(order, where: str) -> dict[int, str]:
+def _item_keys(order_number: str, shipments, where: str) -> dict[int, str]:
     """The key of every non-cancelled Item of a physical Order, by position.
     Positions only tie the file together (a Refund or Promo to its Items); the
-    key is the ASIN. Lines sharing an ASIN are numbered in the file's order."""
+    key is the ASIN. Items sharing an ASIN are numbered in the file's order.
+    Every Item's ASIN is checked, cancelled ones too."""
     keys, seen = {}, Counter()
-    for shipment in _get(order, "shipments", list, where):
-        for item in _live_items(shipment, where):
-            position = _get(item, "position", int, where)
-            asin = _asin(item, f"{where} #{position}")
+    for shipment in shipments:
+        for item in _get(shipment, "items", list, where):
+            asin = _asin(item, where)
+            if _cancelled(item, where):
+                continue
             seen[asin] += 1
-            keys[position] = item_key(order["order_number"], asin, seen[asin])
+            keys[_get(item, "position", int, where)] = item_key(order_number, asin, seen[asin])
     return keys
 
 
-def _asin(item, where: str) -> str:
-    asin = item.get("asin")
+def _asin(item, order_where: str) -> str:
+    asin = item.get("asin") if isinstance(item, dict) else None
     if not isinstance(asin, str) or not re.fullmatch(_ASIN, asin):
-        raise ImporterError(f"amazon {where}: 'asin' must be 10 capital letters or digits, "
-                            f"got {asin!r}")
+        position = item.get("position") if isinstance(item, dict) else None
+        raise ImporterError(
+            f"amazon {order_where} #{position}: 'asin' must be the 10-character code from the "
+            f"Item's product link (B0 plus 8 capital letters or digits, or an ISBN), got {asin!r}")
     return asin
 
 

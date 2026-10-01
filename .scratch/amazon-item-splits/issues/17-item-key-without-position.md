@@ -27,10 +27,10 @@ Every swap seen was inside one shipment box. No Item moved to another shipment.
 
 ## Decision (Steven, 2026-10-01): ASIN
 
-- [x] Key is `amazon <order number> <ASIN>`. A second line with the same ASIN in one Order is `<ASIN>#2`, numbered in the file's order among Items that are not cancelled.
-- [x] Each Item carries `asin` (10 capital letters or digits, from its product link). A missing or malformed one fails the import, naming the Order and Item.
+- [x] Key is `amazon <order number> <ASIN>`. A second Item with the same ASIN in one Order is `<ASIN>#2`, numbered in the file's order among Items that are not cancelled.
+- [x] Each Item, cancelled ones too, carries `asin` from its product link: `B0` plus 8 capital letters or digits, or a book's 10-character ISBN. A missing or malformed one fails the import, naming the Order and Item.
 - [x] Schema version 3. The importer accepts only version 3.
-- [x] Positions stay in the file, only to tie a Promo or Refund to its Items. Warnings still name Items as `#<position>`.
+- [x] Positions stay in the file, only to tie a Promo or Refund to its Items. The adapter's warnings still name Items as `#<position>`. The two CLI warnings about a Refund whose Item row is missing or unreadable name the row's key, since that is what the sheet shows.
 - [x] Scrape prompt, README, and spec addendum (decisions 14 and 15) updated.
 - [x] Today's file re-read for ASINs and rewritten as version 3. Dry run: the same 58 rows.
 
@@ -51,5 +51,6 @@ What identifies an Item inside an Order. Options seen on the page:
 ## Comments
 
 - 2026-10-01: Opened from ticket 15, whose last step says to open this ticket if positions differ between scrapes.
-- 2026-10-01: Implemented. All 86 Items in the first real file have a product link, including books (their ASIN is the 10-digit ISBN) and grocery produce. No Order in it lists one ASIN twice.
-- 2026-10-01: Known limit: when one Order lists the same ASIN on two lines, which line is `#2` follows the file's order, which Amazon can change. Both lines are the same product, so a Refund or a re-scrape can only confuse two rows for the same thing.
+- 2026-10-01: Implemented. All 96 Items in the first real file have a product link, including books (their ASIN is the 10-digit ISBN) and grocery produce. No Order in it lists one ASIN twice.
+- 2026-10-01: Known limit: when one Order lists the same ASIN on two Items, which one is `#2` follows the file's order, which Amazon can change. Both are the same product, but a later scrape that swaps them can append a second Refund row for one Refund, classified from the other Item's row. No Order in the real file has this. If one shows up, the dry run shows the extra Refund row before anything is written.
+- 2026-10-01: Code review follow-up: cancelled Items' ASINs are checked too; the ASIN shape is narrowed so a word typed after an Order key in Notes (for example `REIMBURSED`) is not read as an ASIN; "line" replaced by "Item" (CONTEXT.md); ASIN added to CONTEXT.md.

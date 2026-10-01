@@ -129,17 +129,17 @@ def test_missing_field_names_the_order(tmp_path):
         _parse(_write(tmp_path, order))
 
 
-def _asin(n):
+def _fake_asin(n):
     return f"B0FAKE{n:04d}"
 
 
 def _key(n, order_number="111-0000000-0000009"):
-    return f"amazon {order_number} {_asin(n)}"
+    return f"amazon {order_number} {_fake_asin(n)}"
 
 
 def _item(position, unit_price, quantity=1, tax=None, cancelled=False, asin=None):
     if asin is None:    # a test of a bad position still needs a good ASIN
-        asin = _asin(position if type(position) is int and position > 0 else 1)
+        asin = _fake_asin(position if type(position) is int and position > 0 else 1)
     return {"position": position, "asin": asin,
             "title": f"Fakebrand Thing {position}",
             "short_name": f"Thing {position}", "quantity": quantity,
@@ -157,7 +157,7 @@ def _multi(order_total, *shipments, **overrides):
 
 def _rows(tmp_path, order):
     result = _parse(_write(tmp_path, order))
-    return result, {str(int(t.key[-4:])): t for t in result.transactions}
+    return result, {str(int(t.key.rsplit("B0FAKE", 1)[1])): t for t in result.transactions}
 
 
 def test_shipment_tax_is_spread_by_net_price(tmp_path):
@@ -1091,7 +1091,7 @@ def test_the_scrape_prompt_example_parses_with_the_importer(tmp_path):
     assert sorted(t.refunds for t in refunds) == [
         "amazon 111-0000000-0000001 B0FAKE0002", "amazon 111-0000000-0000001 B0FAKE0003",
         "amazon 111-0000000-0000002"]
-    assert sum(t.amount for t in refunds if t.refunds.endswith((_asin(2), _asin(3)))) == pytest.approx(-17.50)
+    assert sum(t.amount for t in refunds if t.refunds.endswith((_fake_asin(2), _fake_asin(3)))) == pytest.approx(-17.50)
 
     # Order-level tax, a null ship date and a discount with unknown targets.
     assert rows["amazon 111-0000000-0000004 B0FAKE0004"].note_suffix == amazon.UNKNOWN_SHIP_DATE_NOTE
@@ -1122,12 +1122,12 @@ def test_item_key_is_the_asin(tmp_path):
 
 def test_a_rescrape_that_lists_the_items_in_another_order_keeps_every_key(tmp_path):
     first = _multi(30.00, _shipment(_item(1, 20.00), _item(2, 10.00)))
-    swapped = _multi(30.00, _shipment(_item(1, 10.00, asin=_asin(2)), _item(2, 20.00, asin=_asin(1))))
+    swapped = _multi(30.00, _shipment(_item(1, 10.00, asin=_fake_asin(2)), _item(2, 20.00, asin=_fake_asin(1))))
     assert _keyed(_parse(_write(tmp_path, swapped))) == _keyed(_parse(_write(tmp_path, first)))
 
 
 def test_refund_follows_its_item_when_the_positions_move(tmp_path):
-    swapped = _multi(30.00, _shipment(_item(1, 10.00, asin=_asin(2)), _item(2, 20.00, asin=_asin(1))))
+    swapped = _multi(30.00, _shipment(_item(1, 10.00, asin=_fake_asin(2)), _item(2, 20.00, asin=_fake_asin(1))))
     result = _parse(_write(tmp_path, swapped, refunds=[_refund(5.00, positions=[2])]))
     [refund] = _refund_rows(result)
     assert refund.refunds == "amazon 111-0000000-0000009 B0FAKE0001"
@@ -1135,21 +1135,22 @@ def test_refund_follows_its_item_when_the_positions_move(tmp_path):
 
 
 def test_an_asin_listed_twice_in_one_order_gets_a_numbered_key(tmp_path):
-    # One product split across two shipments is two lines with one ASIN.
+    # One product split across two shipments is two Items with one ASIN.
     order = _multi(30.00, _shipment_on("2026-08-11", _item(1, 20.00, tax=0)),
-                   _shipment_on("2026-08-12", _item(2, 10.00, tax=0, asin=_asin(1))))
+                   _shipment_on("2026-08-12", _item(2, 10.00, tax=0, asin=_fake_asin(1))))
     assert _keyed(_parse(_write(tmp_path, order))) == {
         "amazon 111-0000000-0000009 B0FAKE0001": 20.00,
         "amazon 111-0000000-0000009 B0FAKE0001#2": 10.00}
 
 
-def test_a_cancelled_line_does_not_take_a_number_from_a_live_one(tmp_path):
+def test_a_cancelled_item_does_not_take_a_number_from_a_live_one(tmp_path):
     order = _multi(10.00, _shipment(_item(1, 20.00, cancelled=True),
-                                    _item(2, 10.00, asin=_asin(1))))
+                                    _item(2, 10.00, asin=_fake_asin(1))))
     assert list(_keyed(_parse(_write(tmp_path, order)))) == ["amazon 111-0000000-0000009 B0FAKE0001"]
 
 
-@pytest.mark.parametrize("asin", [None, "", "b0fake0001", "B0FAKE001", "B0FAKE00011", "B0 FAKE001", 7])
+@pytest.mark.parametrize("asin", [None, "", "b0fake0001", "B0FAKE001", "B0FAKE00011", "B0 FAKE001",
+                                  "REIMBURSED", 7])
 def test_bad_asin_fails_loudly_naming_the_item(tmp_path, asin):
     order = _order()
     order["shipments"][0]["items"][0]["asin"] = asin
@@ -1177,6 +1178,26 @@ def test_missing_asin_fails_loudly_naming_the_item(tmp_path):
     ("split-transactions automation amazon 111-0000000-0000002 refund 2026-09-12 4.99",
      ["amazon 111-0000000-0000002 refund 2026-09-12 4.99"]),
     ("split-transactions automation amazon D01-0000000-0000003", ["amazon D01-0000000-0000003"]),
+    # A book's ASIN is its ISBN.
+    ("split-transactions automation amazon 111-0000000-0000009 013595705X",
+     ["amazon 111-0000000-0000009 013595705X"]),
+    # A word typed after an Order key is not an ASIN, so the Order key still reads whole.
+    ("split-transactions automation amazon 111-0000000-0000002 REIMBURSED by work",
+     ["amazon 111-0000000-0000002"]),
 ])
 def test_key_pattern_reads_each_kind_of_key_whole(note, keys):
     assert amazon.KEY_PATTERN.findall(note) == keys
+
+
+def test_a_cancelled_item_needs_an_asin_too(tmp_path):
+    cancelled = _item(2, 5.00, cancelled=True)
+    del cancelled["asin"]
+    order = _multi(10.00, _shipment(_item(1, 10.00), cancelled))
+    with pytest.raises(ImporterError, match="111-0000000-0000009 #2.*asin"):
+        _parse(_write(tmp_path, order))
+
+
+def test_bad_asin_fails_even_when_the_order_is_not_ready(tmp_path):
+    order = _multi(10.00, _shipment_on(None, _item(1, 10.00, asin="nope"), shipped=False))
+    with pytest.raises(ImporterError, match="111-0000000-0000009 #1.*asin"):
+        _parse(_write(tmp_path, order))

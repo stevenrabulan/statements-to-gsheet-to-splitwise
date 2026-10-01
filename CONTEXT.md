@@ -22,6 +22,10 @@ _Avoid_: Purchase, Amazon transaction
 One line on an Order (a product, possibly with quantity greater than 1). For Amazon, an Item is the unit that gets one sheet row, except in a Whole Foods Order.
 _Avoid_: Product, line, SKU
 
+**ASIN**:
+Amazon's 10-character code for what an Item is, taken from the Item's link on the Order. It identifies the Item's sheet row across scrapes, because Amazon lists an Order's Items in a different order from one page load to the next.
+_Avoid_: SKU, position (as the Item's identity)
+
 **Whole Foods Order**:
 An Order placed with Whole Foods through Amazon. It gets one sheet row for the whole Order, not one per Item.
 _Avoid_: Grocery order, WFM order

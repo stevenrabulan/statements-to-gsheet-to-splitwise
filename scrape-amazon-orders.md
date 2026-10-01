@@ -215,7 +215,7 @@ Tax goes where Amazon shows it, once: on the Item, or the shipment, or the Order
 
 **Item**
 - `position`: the Item's number within the whole Order, counting from 1, continuing across shipments. It only ties this file together: a Promo's or Refund's `positions` point at these numbers. Amazon changes the order of an Order's Items between page loads, so read each Order's Items in one reading and number them from that reading.
-- `asin`: the 10-character product code in the Item's product link (`/dp/<ASIN>` or `/gp/product/<ASIN>`), capital letters and digits, copied exactly. The importer recognizes the Item on later scrapes by this code, so it must come from the link, never from memory. When an Item has no product link, stop and tell Steven.
+- `asin`: the 10-character product code in the Item's product link (`/dp/<ASIN>` or `/gp/product/<ASIN>`), copied exactly: `B0` plus 8 capital letters or digits, or for a book its 10-character ISBN. The importer recognizes the Item on later scrapes by this code, so it must come from the link, never from memory. When an Item has no product link, stop and tell Steven.
 - `title`: the full product title, exactly as shown.
 - `short_name`: the **brand plus a plain description**, in normal case (never ALL CAPS). Keep the brand as shown. Drop sizes, counts, colors, model numbers, and marketing words. Write full words, no made-up abbreviations. Examples: `Glad ForceFlex Trash Bags`, `Anker USB-C Charging Cable`, `Kirkland Signature Almonds`. With no brand, a plain description alone.
 - `quantity`: whole number shown (1 if not shown).
