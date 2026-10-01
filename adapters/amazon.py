@@ -403,8 +403,12 @@ def _shipped_items(order, positions: list[int], where: str) -> list[tuple[str, d
 
 def _ship_date(shipment, order, where: str) -> tuple[date, bool]:
     """(date the cutoff compares, whether it is the real ship date). A shipped
-    shipment with no ship date stands in the Order Date."""
-    if shipment.get("ship_date") is None:
+    shipment with no ship date stands in the Order Date. The scraper must still
+    write the field, as null."""
+    if "ship_date" not in shipment:
+        raise ImporterError(
+            f"amazon {where}: missing 'ship_date' (null when Amazon shows no ship date)")
+    if shipment["ship_date"] is None:
         return _date(_get(order, "order_date", str, where), where), False
     return _date(_get(shipment, "ship_date", str, where), where), True
 

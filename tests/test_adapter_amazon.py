@@ -803,6 +803,22 @@ def test_unknown_ship_date_skip_names_only_the_items_it_drops(tmp_path):
     assert ["#2" in w for w in result.warnings] == [False, True]
 
 
+def test_a_shipment_with_no_ship_date_field_fails_loudly(tmp_path):
+    # null means Amazon shows no ship date; a missing field means the scrape dropped it.
+    shipment = _shipment_on("2026-08-02", _item(1, 10.00, tax=0))
+    del shipment["ship_date"]
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*ship_date.*null"):
+        _parse(_write(tmp_path, _multi(10.00, shipment)))
+
+
+def test_a_refund_on_a_shipment_with_no_ship_date_field_fails_loudly(tmp_path):
+    shipped = _shipment_on("2026-08-02", _item(1, 10.00, tax=0))
+    del shipped["ship_date"]
+    order = _multi(20.00, shipped, _shipment_on(None, _item(2, 10.00, tax=0), shipped=False))
+    with pytest.raises(ImporterError, match="111-0000000-0000009.*ship_date.*null"):
+        _parse(_write(tmp_path, order, refunds=[_refund(5.00)]))
+
+
 def test_known_ship_date_never_gets_the_note(tmp_path):
     _, rows = _rows(tmp_path, _multi(10.00, _shipment_on("2026-08-02", _item(1, 10.00, tax=0))))
     assert rows["1"].note_suffix == ""
