@@ -4,12 +4,12 @@
 
 **Blocked by:** 01, 02, 03, 04, 05, 06, 08, 09, 10, 11, 12, 13, 14
 
-**Status:** ready-for-human
+**Status:** done
 
 - [x] Run the scrape prompt from Claude Code, driving logged-in Chrome. The file lands in this month's transactions folder without a download step.
 - [x] Dry run: the summary lists Items since 2026-07-29 and all skipped reasons, and at least one multi-Item Order's formula matches its Amazon invoice.
-- [ ] Import a small real file. New Item rows show "For who" = All and "Send to Splitwise" ticked.
-- [x] Whole Foods Orders and the Grocery Subscription each appear as one row, and a Whole Foods row's formula matches its Order page. (Checked in the dry run. Check again in the sheet after the import.)
+- [x] Import a small real file. New Item rows show "For who" = All and "Send to Splitwise" ticked.
+- [x] Whole Foods Orders and the Grocery Subscription each appear as one row, and a Whole Foods row's formula matches its Order page. (Checked in the dry run and in the sheet.)
 - [x] Re-run the scrape and compare Item positions for the same Orders. If they differ, open a follow-up ticket to change the key. (They differ. See ticket 17.)
 
 ## Comments
@@ -28,3 +28,4 @@
   - **Ship date on a delivered shipment with no "Track package" link** (older Orders, same-day grocery delivery, returned Items) is `null`. 25 Items placed 2026-07-03 to 2026-07-28 were skipped for this reason. Some of them were delivered 2026-07-30 or 2026-07-31, so they may have shipped on or after the Cutoff Date.
   - **Refund dates.** The order details page shows "Refund Total" but no date. The date is on the "View return/refund status" page, and only for returned Items. A refund with no return (5.69 on grocery Order `111-0000000-0000107`) shows no date anywhere the scraper could read, so it is not in the file.
 - 2026-10-01: To enter by hand: the 5.69 refund above; the 27.04 refund on `111-0000000-0000104` (before the cutoff, skipped by the importer); and a charge of 16.23 against that same Order on 2026-09-30, shown on the Your Payments page (the socks return is still "in transit").
+- 2026-10-02: Imported `transactions/2026-10/amazon-orders-2026-10-01.json` (schema version 3, ASIN keys from ticket 17): 58 rows, sheet rows 940 to 997. Read back from the sheet: all 58 have "Send to Splitwise" ticked and "For who" = All. Both Whole Foods rows (135.12 in store, 113.99 delivery) and both Grocery Subscription rows (9.99) are one row each.
