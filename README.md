@@ -78,6 +78,21 @@ Some cards (FakeMart, for example) export your **entire** transaction history on
 
 Dropped rows are reported in the per-file summary (e.g. `skipped={'before 2026-06-01': 25}`), so you can always see how many were filtered. The cutoff is applied before deduplication, and `--account` overrides the label only. It does not disable a matched account's cutoff.
 
+#### Which Google Sheet to write to (required)
+
+The `_sheet` entry names the sheet and tab. It is not an account, and the importer stops with an error if it is missing:
+
+```json
+{
+  "_sheet": {
+    "spreadsheet_id": "YOUR_SPREADSHEET_ID",
+    "gid": 0
+  }
+}
+```
+
+Both values are in the sheet's URL: `https://docs.google.com/spreadsheets/d/<spreadsheet_id>/edit?gid=<gid>`.
+
 ### 3. Add Google Cloud Credentials
 1. Go to the [Google Cloud Console](https://console.cloud.google.com) and create a project.
 2. Enable the **Google Sheets API**.

@@ -7,10 +7,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from accounts import load_sheet_config
 from models import Transaction
 
-SPREADSHEET_ID = "YOUR_SPREADSHEET_ID"
-SHEET_GID = 0
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
 TOKEN_FILE = Path(__file__).parent / "token.json"
@@ -76,14 +75,15 @@ def read_existing_rows() -> list[list]:
     default FORMATTED_VALUE a date column formatted as YYYY/MM/DD returns
     "2026/04/11", which no longer matches how build_row() wrote it.
     """
+    sheet = load_sheet_config()
     creds = _get_credentials()
     service = build("sheets", "v4", credentials=creds)
-    sheet_name = get_sheet_name(service, SPREADSHEET_ID, SHEET_GID)
+    sheet_name = get_sheet_name(service, sheet.spreadsheet_id, sheet.gid)
     resp = (
         service.spreadsheets()
         .values()
         .get(
-            spreadsheetId=SPREADSHEET_ID,
+            spreadsheetId=sheet.spreadsheet_id,
             range=f"'{sheet_name}'!A:K",
             valueRenderOption="UNFORMATTED_VALUE",
         )
@@ -93,9 +93,10 @@ def read_existing_rows() -> list[list]:
 
 
 def append_transactions(transactions: list[Transaction], start_search_row: int = 1) -> tuple[int, int, int]:
+    sheet = load_sheet_config()
     creds = _get_credentials()
     service = build("sheets", "v4", credentials=creds)
-    sheet_name = get_sheet_name(service, SPREADSHEET_ID, SHEET_GID)
+    sheet_name = get_sheet_name(service, sheet.spreadsheet_id, sheet.gid)
 
     rows = [build_row(t) for t in transactions]
     if not rows:
@@ -114,7 +115,7 @@ def append_transactions(transactions: list[Transaction], start_search_row: int =
             break
 
     service.spreadsheets().values().update(
-        spreadsheetId=SPREADSHEET_ID,
+        spreadsheetId=sheet.spreadsheet_id,
         range=f"'{sheet_name}'!A{target_row_idx}",
         valueInputOption="USER_ENTERED",
         body={"values": rows},

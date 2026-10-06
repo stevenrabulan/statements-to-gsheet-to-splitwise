@@ -2,8 +2,10 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
-from models import Transaction
+from models import SheetConfig, Transaction
 from sheets_writer import build_row
+
+SHEET = SheetConfig(spreadsheet_id="sheet-id-from-config", gid=7)
 
 
 def _txn(**kw):
@@ -41,7 +43,8 @@ def test_k_note_falls_back_when_source_file_empty():
 @patch("sheets_writer.build")
 @patch("sheets_writer._get_credentials")
 @patch("sheets_writer.get_sheet_name", return_value="Sheet1")
-def test_read_existing_rows_returns_values(mock_name, mock_creds, mock_build):
+@patch("sheets_writer.load_sheet_config", return_value=SHEET)
+def test_read_existing_rows_returns_values(mock_sheet, mock_name, mock_creds, mock_build):
     service = MagicMock()
     (service.spreadsheets.return_value.values.return_value
         .get.return_value.execute.return_value) = {"values": [["06/01/2026", "5.00"]]}
@@ -55,12 +58,16 @@ def test_read_existing_rows_returns_values(mock_name, mock_creds, mock_build):
     kwargs = (service.spreadsheets.return_value.values.return_value
               .get.call_args.kwargs)
     assert kwargs["valueRenderOption"] == "UNFORMATTED_VALUE"
+    # The sheet comes from accounts.json, never from a constant in the code.
+    assert kwargs["spreadsheetId"] == "sheet-id-from-config"
+    mock_name.assert_called_once_with(service, "sheet-id-from-config", 7)
 
 
 @patch("sheets_writer.build")
 @patch("sheets_writer._get_credentials")
 @patch("sheets_writer.get_sheet_name", return_value="Sheet1")
-def test_read_existing_rows_empty_sheet(mock_name, mock_creds, mock_build):
+@patch("sheets_writer.load_sheet_config", return_value=SHEET)
+def test_read_existing_rows_empty_sheet(mock_sheet, mock_name, mock_creds, mock_build):
     service = MagicMock()
     (service.spreadsheets.return_value.values.return_value
         .get.return_value.execute.return_value) = {}

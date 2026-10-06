@@ -2,12 +2,16 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
-from models import AccountConfig, ImporterError
+from models import AccountConfig, ImporterError, SheetConfig
 
 ACCOUNTS_PATH = Path(__file__).parent / "accounts.json"
 
+# Reserved accounts.json key: the Google Sheet to write to, not an account.
+SHEET_KEY = "_sheet"
+
 # Keys permitted inside the object form of an accounts.json value.
 _ALLOWED_KEYS = {"name", "ignore_before"}
+_SHEET_KEYS = {"spreadsheet_id", "gid"}
 
 
 def _parse_ignore_before(raw, key: str) -> date | None:
@@ -42,16 +46,54 @@ def _parse_entry(key: str, value) -> AccountConfig:
     return AccountConfig(name=name, ignore_before=ignore_before)
 
 
+def _parse_sheet(value) -> SheetConfig:
+    """Parse the "_sheet" entry: {"spreadsheet_id": "...", "gid": 0}."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{SHEET_KEY}: must be an object with {sorted(_SHEET_KEYS)}")
+    if set(value) != _SHEET_KEYS:
+        raise ValueError(
+            f"{SHEET_KEY}: expected exactly {sorted(_SHEET_KEYS)}, got {sorted(value)}"
+        )
+    spreadsheet_id, gid = value["spreadsheet_id"], value["gid"]
+    if not isinstance(spreadsheet_id, str) or not spreadsheet_id.strip():
+        raise ValueError(f"{SHEET_KEY}: spreadsheet_id must be a non-empty string, got {spreadsheet_id!r}")
+    # bool is an int subclass; true/false is never a valid gid.
+    if isinstance(gid, bool) or not isinstance(gid, int) or gid < 0:
+        raise ValueError(f"{SHEET_KEY}: gid must be a whole number, got {gid!r}")
+    return SheetConfig(spreadsheet_id=spreadsheet_id.strip(), gid=gid)
+
+
+def _read(p: Path) -> dict:
+    data = json.loads(p.read_text())
+    if not isinstance(data, dict):
+        raise ValueError("accounts file must be a JSON object")
+    return data
+
+
 def load_accounts(path: str | Path = ACCOUNTS_PATH) -> dict[str, AccountConfig]:
     """Load the filename-substring -> account-config map. Missing file = empty map."""
     p = Path(path)
     if not p.exists():
         return {}
     try:
-        data = json.loads(p.read_text())
-        if not isinstance(data, dict):
-            raise ValueError("accounts file must be a JSON object")
-        return {str(k): _parse_entry(str(k), v) for k, v in data.items()}
+        return {
+            str(k): _parse_entry(str(k), v) for k, v in _read(p).items() if k != SHEET_KEY
+        }
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ImporterError(f"{p} is invalid: {exc}")
+
+
+def load_sheet_config(path: str | Path = ACCOUNTS_PATH) -> SheetConfig:
+    """Load the Google Sheet to write to. There is no default: a missing entry fails loud."""
+    p = Path(path)
+    hint = f'Add a "{SHEET_KEY}" entry (see accounts.example.json).'
+    if not p.exists():
+        raise ImporterError(f"{p} not found. {hint}")
+    try:
+        data = _read(p)
+        if SHEET_KEY not in data:
+            raise ImporterError(f"{p} does not say which Google Sheet to write to. {hint}")
+        return _parse_sheet(data[SHEET_KEY])
     except (json.JSONDecodeError, ValueError) as exc:
         raise ImporterError(f"{p} is invalid: {exc}")
 

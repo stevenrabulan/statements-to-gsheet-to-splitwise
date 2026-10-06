@@ -3,8 +3,8 @@ from datetime import date
 
 import pytest
 
-from accounts import load_accounts, account_for_filename
-from models import AccountConfig, ImporterError
+from accounts import load_accounts, load_sheet_config, account_for_filename
+from models import AccountConfig, ImporterError, SheetConfig
 
 
 def _map(**kwargs) -> dict[str, AccountConfig]:
@@ -126,3 +126,46 @@ def test_empty_name_raises(tmp_path):
     p.write_text('{"FakeMart": "   "}')
     with pytest.raises(ImporterError, match="empty"):
         load_accounts(p)
+
+
+def _sheet_file(tmp_path, sheet):
+    p = tmp_path / "accounts.json"
+    p.write_text(json.dumps({"Chase1111": "Chase Sapphire Reserve", "_sheet": sheet}))
+    return p
+
+
+def test_sheet_config_loads(tmp_path):
+    p = _sheet_file(tmp_path, {"spreadsheet_id": "abc123", "gid": 42})
+    assert load_sheet_config(p) == SheetConfig(spreadsheet_id="abc123", gid=42)
+
+
+def test_sheet_entry_is_not_an_account(tmp_path):
+    p = _sheet_file(tmp_path, {"spreadsheet_id": "abc123", "gid": 42})
+    assert load_accounts(p) == {"Chase1111": AccountConfig("Chase Sapphire Reserve")}
+
+
+def test_sheet_config_missing_file_raises(tmp_path):
+    with pytest.raises(ImporterError, match="_sheet"):
+        load_sheet_config(tmp_path / "nope.json")
+
+
+def test_sheet_config_missing_entry_raises(tmp_path):
+    p = tmp_path / "accounts.json"
+    p.write_text('{"Chase1111": "Chase Sapphire Reserve"}')
+    with pytest.raises(ImporterError, match="_sheet"):
+        load_sheet_config(p)
+
+
+@pytest.mark.parametrize("sheet", [
+    "abc123",
+    {"spreadsheet_id": "abc123"},
+    {"spreadsheet_id": "abc123", "gid": 42, "tab": "Split payments"},
+    {"spreadsheet_id": "  ", "gid": 42},
+    {"spreadsheet_id": 123, "gid": 42},
+    {"spreadsheet_id": "abc123", "gid": "42"},
+    {"spreadsheet_id": "abc123", "gid": True},
+    {"spreadsheet_id": "abc123", "gid": -1},
+])
+def test_bad_sheet_entry_raises(tmp_path, sheet):
+    with pytest.raises(ImporterError, match="_sheet"):
+        load_sheet_config(_sheet_file(tmp_path, sheet))

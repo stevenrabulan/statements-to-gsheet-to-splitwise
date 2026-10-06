@@ -29,6 +29,12 @@ class AccountConfig:
     ignore_before: date | None = None  # drop transactions dated before this day
 
 
+@dataclass(frozen=True)
+class SheetConfig:
+    spreadsheet_id: str   # the ID in the Google Sheet's URL
+    gid: int              # the tab's gid in that URL
+
+
 @dataclass
 class ParseResult:
     transactions: list[Transaction] = field(default_factory=list)
