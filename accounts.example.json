@@ -4,14 +4,8 @@
     "gid": 0
   },
   "Chase1111": "Chase Sapphire Reserve",
-  "Chase1217": "Chase Card 2",
   "Chase8842": "Chase Checking",
   "Discover": "Discover Card",
-  "Fakecoin": "Fakecoin Card",
-  "FakeMart": {
-    "name": "FakeMart Card",
-    "ignore_before": "2026-06-01"
-  },
   "amazon-orders": {
     "name": "Amazon",
     "ignore_before": "2026-07-29"
