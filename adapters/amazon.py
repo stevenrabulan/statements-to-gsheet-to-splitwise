@@ -6,6 +6,7 @@ happens here, in Decimal, and each row's Amount is written as a formula.
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_FLOOR, Decimal
@@ -20,7 +21,6 @@ SCHEMA_VERSION = 3
 _PHYSICAL = "physical"
 _WHOLE_FOODS = "whole_foods"
 _DIGITAL = "digital"
-_KINDS = {_PHYSICAL, _WHOLE_FOODS, _DIGITAL}
 WHOLE_FOODS_LABEL = "Whole Foods"
 
 GIFT_CARD_LABEL = "Amazon Gift Card"
@@ -48,7 +48,7 @@ ROW_KEY_PATTERN = re.compile(_ROW_KEY)
 
 # Added after the key in Notes when the ship date was unknown (spec addendum, decision 3).
 UNKNOWN_SHIP_DATE_NOTE = " (ship date unknown, Order Date used for cutoff)"
-UNKNOWN_SHIP_DATE = "unknown ship date"
+SKIP_UNKNOWN_SHIP_DATE = "unknown ship date"
 
 
 def item_key(order_number: str, asin: str, occurrence: int) -> str:
@@ -61,9 +61,10 @@ def order_key(order_number: str) -> str:
     return f"amazon {order_number}"
 
 
-def refund_key(item: str, refund_date: date, amount: Decimal) -> str:
-    """Date and amount keep several partial refunds on one Item distinct."""
-    return f"{item} refund {refund_date.isoformat()} {amount:.2f}"
+def refund_key(row_key: str, refund_date: date, amount: Decimal) -> str:
+    """`row_key` is the key of an Item or a Whole Foods Order. Date and amount
+    keep several partial refunds on one row distinct."""
+    return f"{row_key} refund {refund_date.isoformat()} {amount:.2f}"
 
 
 def parse_orders(path: Path, config: AccountConfig,
@@ -105,18 +106,16 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     if not isinstance(order, dict):
         raise ImporterError(f"amazon: each order must be an object, got {order!r}")
     order_number = _get(order, "order_number", str, "order")
-    where = f"order {order_number}"
     kind = order.get("kind")
-    if not isinstance(kind, str) or kind not in _KINDS:
+    if not isinstance(kind, str) or kind not in _HANDLERS:
         raise ImporterError(
-            f"amazon {where}: 'kind' must be one of {sorted(_KINDS)}, got {kind!r}")
-    if kind == _DIGITAL:
-        _parse_digital(order, order_number, config, accounts, result)
-        return
+            f"amazon order {order_number}: 'kind' must be one of {sorted(_HANDLERS)}, got {kind!r}")
+    _HANDLERS[kind].parse_order(order, order_number, config, accounts, result)
+
+
+def _parse_physical(order, order_number: str, config, accounts, result: ParseResult) -> None:
+    where = f"order {order_number}"
     order_date = _date(_get(order, "order_date", str, where), where)
-    if kind == _WHOLE_FOODS:
-        _parse_whole_foods(order, order_number, order_date, config, accounts, result)
-        return
     shipments = _get(order, "shipments", list, where)
     _check_positions(shipments, where)
     keys = _item_keys(order_number, shipments, where)
@@ -128,7 +127,7 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
     notices = []    # warnings that belong to the Order only if it is imported
     costs = _loaded_costs(order, shipments, where, notices)
     cutoff = config.ignore_before
-    if cutoff is not None and all(c.shipped_on < cutoff for c in costs):
+    if cutoff is not None and all(c.compared.is_before(cutoff) for c in costs):
         # Recorded as Charge rows already; its totals are not our concern.
         for cost in costs:
             _count_before_cutoff(cost, cutoff, where, result)
@@ -140,41 +139,39 @@ def _parse_order(order, config, accounts, result: ParseResult) -> None:
         return
 
     result.warnings += notices
-    account, warning = _payment_method(_get(order, "payment", list, where),
-                                       where, config, accounts)
-    if warning:
-        result.warnings.append(warning)
+    account = _payment_account(order, where, config, accounts, result)
     for cost in costs:
-        if cutoff is not None and cost.shipped_on < cutoff:
+        if cutoff is not None and cost.compared.is_before(cutoff):
             _count_before_cutoff(cost, cutoff, where, result)
             continue
-        if not cost.ship_date_known:
+        if not cost.compared.is_ship_date:
             result.warnings.append(
                 f"amazon {where}: ship date unknown for #{cost.position}; Order Date "
                 f"{order_date.isoformat()} used for the cutoff")
         result.transactions.append(_item_row(cost, keys[cost.position], order_date, account))
 
 
-def _parse_whole_foods(order, order_number: str, order_date: date, config, accounts,
+def _parse_whole_foods(order, order_number: str, config, accounts,
                        result: ParseResult) -> None:
     """A Whole Foods Order is one row for the whole Order, tip included, with no
     Items (decision 7). The cutoff compares the Order Date."""
     where = f"order {order_number}"
+    order_date = _date(_get(order, "order_date", str, where), where)
     delivered = order.get("delivered")
     if not isinstance(delivered, bool):
         raise ImporterError(f"amazon {where}: 'delivered' must be true or false, got {delivered!r}")
     if not delivered:
         result.skipped["not ready"] += 1
         return
-    cutoff = config.ignore_before
-    if cutoff is not None and order_date < cutoff:
+    cutoff = _cutoff_after(order_date, config)
+    if cutoff:
         result.skipped[f"before {cutoff.isoformat()}"] += 1
         return
 
-    additions = _lines(order, "additions", where)
+    additions = _summary_line_amounts(order, "additions", where)
     if not additions:
         raise ImporterError(f"amazon {where}: 'additions' must list at least one line")
-    discounts = _lines(order, "discounts", where)
+    discounts = _summary_line_amounts(order, "discounts", where)
     expected = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
     calculated = sum(additions, Decimal(0)) - sum(discounts, Decimal(0))
     if calculated != expected:
@@ -184,10 +181,7 @@ def _parse_whole_foods(order, order_number: str, order_date: date, config, accou
             f"Order skipped")
         return
 
-    account, warning = _payment_method(_get(order, "payment", list, where),
-                                       where, config, accounts)
-    if warning:
-        result.warnings.append(warning)
+    account = _payment_account(order, where, config, accounts, result)
     formula = "+".join(_dollars(a) for a in additions) + "".join(f"-{_dollars(a)}" for a in discounts)
     result.transactions.append(Transaction(
         date=order_date,
@@ -204,18 +198,15 @@ def _parse_digital(order, order_number: str, config, accounts, result: ParseResu
     charged (decision 9). Its Amount is the amount Amazon shows, a plain number."""
     where = f"order {order_number}"
     charge_date = _date(_get(order, "charge_date", str, where), where)
-    cutoff = config.ignore_before
-    if cutoff is not None and charge_date < cutoff:
+    cutoff = _cutoff_after(charge_date, config)
+    if cutoff:
         result.skipped[f"before {cutoff.isoformat()}"] += 1
         return
     short_name = _get(order, "short_name", str, where).strip()
     if not short_name:
         raise ImporterError(f"amazon {where}: short_name must not be empty")
     total = _money(_get(order, "order_total", (int, Decimal), where), f"{where} order_total")
-    account, warning = _payment_method(_get(order, "payment", list, where),
-                                       where, config, accounts)
-    if warning:
-        result.warnings.append(warning)
+    account = _payment_account(order, where, config, accounts, result)
     result.transactions.append(Transaction(
         date=charge_date,
         description=short_name,
@@ -235,7 +226,7 @@ def _total_mismatch(order, costs: list["_ItemCost"], where: str) -> str | None:
     return f"expected total {expected:.2f} but calculated {calculated:.2f}"
 
 
-def _lines(order, field: str, where: str) -> list[Decimal]:
+def _summary_line_amounts(order, field: str, where: str) -> list[Decimal]:
     """The dollar amounts of the summary lines Amazon shows under `field`."""
     return [_money(_get(line, "amount", (int, Decimal), f"{where} {field}"), f"{where} {field}")
             for line in _get(order, field, list, where)]
@@ -244,13 +235,13 @@ def _lines(order, field: str, where: str) -> list[Decimal]:
 def _count_before_cutoff(cost: "_ItemCost", cutoff: date, where: str, result: ParseResult) -> None:
     """Count an Item dropped by the cutoff. One that only fell back to the Order
     Date is named in a warning, since nothing else says why."""
-    if cost.ship_date_known:
+    if cost.compared.is_ship_date:
         result.skipped[f"before {cutoff.isoformat()}"] += 1
         return
-    result.skipped[UNKNOWN_SHIP_DATE] += 1
+    result.skipped[SKIP_UNKNOWN_SHIP_DATE] += 1
     result.warnings.append(
         f"amazon {where}: ship date unknown for #{cost.position}; Order Date "
-        f"{cost.shipped_on.isoformat()} is before the {cutoff.isoformat()} cutoff; Item skipped")
+        f"{cost.compared.on.isoformat()} is before the {cutoff.isoformat()} cutoff; Item skipped")
 
 
 def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -> None:
@@ -260,17 +251,25 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
     order_number = _get(refund, "order_number", str, "refund")
     order = orders.get(order_number)
     positions = _get(refund, "positions", list, f"refund on order {order_number}")
+    # An Order missing from the file is treated as physical until the positions say otherwise.
+    handler = _HANDLERS[order["kind"]].parse_refund if order else _parse_physical_refund
+    handler(refund, order, positions, config, accounts, result)
+
+
+def _parse_digital_refund(refund, order, positions: list, config, accounts,
+                          result: ParseResult) -> None:
+    order_where = f"order {order['order_number']}"
+    amount, refund_date = _refund_amount_and_date(refund, order_where)
+    result.skipped["refund on Digital Order"] += 1
+    result.warnings.append(
+        f"amazon {order_where}: Refund of {amount:.2f} on {refund_date.isoformat()} is on "
+        f"a Digital Order, which has no Items to refund; Refund skipped, enter it by hand")
+
+
+def _parse_physical_refund(refund, order, positions: list, config, accounts,
+                           result: ParseResult) -> None:
+    order_number = refund["order_number"]
     order_where = f"order {order_number}"
-    if order is not None and order["kind"] == _WHOLE_FOODS:
-        _parse_whole_foods_refund(refund, order, positions, config, accounts, result)
-        return
-    if order is not None and order["kind"] == _DIGITAL:
-        amount, refund_date = _refund_amount_and_date(refund, order_where)
-        result.skipped["refund on Digital Order"] += 1
-        result.warnings.append(
-            f"amazon {order_where}: Refund of {amount:.2f} on {refund_date.isoformat()} is on "
-            f"a Digital Order, which has no Items to refund; Refund skipped, enter it by hand")
-        return
     if order is None and not positions:
         # Only a Whole Foods Order has no positions, but this one is not in the file.
         amount, refund_date = _refund_amount_and_date(refund, order_where)
@@ -285,8 +284,6 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
                             f"distinct whole number, got {positions!r}")
     where = f"{order_where} " + ", ".join(f"#{p}" for p in positions)
     amount, refund_date = _refund_amount_and_date(refund, where)
-    if amount <= 0:
-        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
     what = f"Refund of {amount:.2f} on {refund_date.isoformat()}"
 
     found = _shipped_items(order, positions, where) if order else None
@@ -296,12 +293,12 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
                                f"Refund skipped, enter it by hand")
         return
     cutoff = config.ignore_before
-    for short_name, shipped_on, known in found:
-        if cutoff is not None and shipped_on < cutoff:
+    for _, compared in found:
+        if cutoff is not None and compared.is_before(cutoff):
             # The Item is a Charge row from before Item rows existed.
             result.skipped[f"refund before {cutoff.isoformat()}"] += 1
-            how = (f"shipped {shipped_on.isoformat()}" if known
-                   else f"with no ship date, ordered {shipped_on.isoformat()}")
+            how = (f"shipped {compared.on.isoformat()}" if compared.is_ship_date
+                   else f"with no ship date, ordered {compared.on.isoformat()}")
             result.warnings.append(f"amazon {where}: {what} is for an Item {how}, before the "
                                    f"{cutoff.isoformat()} cutoff; Refund skipped, enter it by hand")
             return
@@ -313,12 +310,9 @@ def _parse_refund(refund, orders: dict, config, accounts, result: ParseResult) -
                                f"the Order fails the total check ({mismatch}); "
                                f"Refund skipped, enter it by hand")
         return
-    account, warning = _payment_method(_get(order, "payment", list, order_where),
-                                       order_where, config, accounts)
-    if warning and warning not in result.warnings:
-        result.warnings.append(warning)
+    account = _payment_account(order, order_where, config, accounts, result)
     keys = _item_keys(order_number, _get(order, "shipments", list, order_where), order_where)
-    for position, (short_name, _, _), part in zip(positions, found, parts):
+    for position, (short_name, _), part in zip(positions, found, parts):
         if not part:
             continue    # a share too small to be a cent is not a row
         item = keys[position]
@@ -343,11 +337,9 @@ def _parse_whole_foods_refund(refund, order, positions: list, config, accounts,
         raise ImporterError(f"amazon {where}: a Whole Foods Order has no Items, so its "
                             f"refund 'positions' must be [], got {positions!r}")
     amount, refund_date = _refund_amount_and_date(refund, where)
-    if amount <= 0:
-        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
-    cutoff = config.ignore_before
     order_date = _date(_get(order, "order_date", str, where), where)
-    if cutoff is not None and order_date < cutoff:
+    cutoff = _cutoff_after(order_date, config)
+    if cutoff:
         # The Order is a Charge row from before Order rows existed.
         result.skipped[f"refund before {cutoff.isoformat()}"] += 1
         result.warnings.append(
@@ -355,24 +347,53 @@ def _parse_whole_foods_refund(refund, order, positions: list, config, accounts,
             f"Order dated {order_date.isoformat()}, before the {cutoff.isoformat()} cutoff; "
             f"Refund skipped, enter it by hand")
         return
-    account, warning = _payment_method(_get(order, "payment", list, where),
-                                       where, config, accounts)
-    if warning and warning not in result.warnings:
-        result.warnings.append(warning)
-    row = order_key(order_number)
+    account = _payment_account(order, where, config, accounts, result)
+    order_row_key = order_key(order_number)
     result.transactions.append(Transaction(
         date=refund_date,
         description=f"Refund: {WHOLE_FOODS_LABEL}",
         amount=-float(amount),
         account=account,
-        key=refund_key(row, refund_date, amount),
-        refunds=row,
+        key=refund_key(order_row_key, refund_date, amount),
+        refunds=order_row_key,
     ))
+
+
+@dataclass(frozen=True)
+class _KindHandlers:
+    parse_order: Callable
+    parse_refund: Callable
+
+
+# One entry per Order kind, so the Order parse and the Refund parse cannot disagree.
+_HANDLERS = {
+    _PHYSICAL: _KindHandlers(_parse_physical, _parse_physical_refund),
+    _WHOLE_FOODS: _KindHandlers(_parse_whole_foods, _parse_whole_foods_refund),
+    _DIGITAL: _KindHandlers(_parse_digital, _parse_digital_refund),
+}
+
+
+def _cutoff_after(day: date, config) -> date | None:
+    """The Amazon entry's Cutoff Date when `day` is before it, else None."""
+    cutoff = config.ignore_before
+    return cutoff if cutoff is not None and day < cutoff else None
+
+
+def _payment_account(order, where: str, config, accounts, result: ParseResult) -> str:
+    """The Order's Payment Method label. A warning about it is added once, since
+    an Order's Refunds repeat the Order's own."""
+    account, warning = _payment_method(_get(order, "payment", list, where),
+                                       where, config, accounts)
+    if warning and warning not in result.warnings:
+        result.warnings.append(warning)
+    return account
 
 
 def _refund_amount_and_date(refund, where: str) -> tuple[Decimal, date]:
     amount = _money(_get(refund, "amount", (int, Decimal), f"{where} refund"),
                     f"{where} refund amount")
+    if amount <= 0:
+        raise ImporterError(f"amazon {where}: refund amount must be positive, got {amount}")
     return amount, _date(_get(refund, "refund_date", str, f"{where} refund"), f"{where} refund")
 
 
@@ -393,34 +414,42 @@ def _refund_parts(order, positions: list[int], amount: Decimal,
     return _spread(amount, [cost_of[p] for p in positions]), None
 
 
-def _shipped_items(order, positions: list[int], where: str) -> list[tuple[str, date, bool]] | None:
-    """(short name, cutoff date, whether it is a real ship date) for each of
-    `positions`, in that order, or None when any of them is not a shipped,
-    non-cancelled Item of the Order. With no ship date the Order Date is the
-    cutoff date."""
+def _shipped_items(order, positions: list[int], where: str) -> list[tuple[str, "_ComparedDate"]] | None:
+    """(short name, cutoff date) for each of `positions`, in that order, or None
+    when any of them is not a shipped, non-cancelled Item of the Order."""
     by_position = {}
     for shipment in _get(order, "shipments", list, where):
         if shipment.get("shipped") is not True:
             continue
         for item in _live_items(shipment, where):
-            shipped_on, known = _ship_date(shipment, order, where)
             by_position[_get(item, "position", int, where)] = (
-                _get(item, "short_name", str, where).strip(), shipped_on, known)
+                _get(item, "short_name", str, where).strip(),
+                _ship_date(shipment, order, where))
     if any(p not in by_position for p in positions):
         return None
     return [by_position[p] for p in positions]
 
 
-def _ship_date(shipment, order, where: str) -> tuple[date, bool]:
-    """(date the cutoff compares, whether it is the real ship date). A shipped
-    shipment with no ship date stands in the Order Date. The scraper must still
-    write the field, as null."""
+@dataclass(frozen=True)
+class _ComparedDate:
+    """The date the cutoff compares for an Item: its shipment's ship date, or
+    the Order Date when Amazon shows no ship date."""
+    on: date
+    is_ship_date: bool
+
+    def is_before(self, cutoff: date) -> bool:
+        return self.on < cutoff
+
+
+def _ship_date(shipment, order, where: str) -> _ComparedDate:
+    """A shipped shipment with no ship date stands in the Order Date. The
+    scraper must still write the field, as null."""
     if "ship_date" not in shipment:
         raise ImporterError(
             f"amazon {where}: missing 'ship_date' (null when Amazon shows no ship date)")
     if shipment["ship_date"] is None:
-        return _date(_get(order, "order_date", str, where), where), False
-    return _date(_get(shipment, "ship_date", str, where), where), True
+        return _ComparedDate(_date(_get(order, "order_date", str, where), where), False)
+    return _ComparedDate(_date(_get(shipment, "ship_date", str, where), where), True)
 
 
 def _item_keys(order_number: str, shipments, where: str) -> dict[int, str]:
@@ -491,8 +520,7 @@ class _ItemCost:
     unit_price: Decimal
     line: Decimal
     own_tax: Decimal | None      # Amazon's per-Item tax, when shown
-    shipped_on: date             # its shipment's ship date (else the Order Date); the cutoff compares this
-    ship_date_known: bool = True
+    compared: "_ComparedDate"
     promo: Decimal = Decimal(0)
     tax: Decimal = Decimal(0)
     shipping: Decimal = Decimal(0)
@@ -515,8 +543,8 @@ def _loaded_costs(order, shipments, where, notices: list[str]) -> list[_ItemCost
     groups = []     # [(shipment, [_ItemCost])], so shipment-scope spreads know their Items
     for shipment in shipments:
         live = _live_items(shipment, where)
-        shipped_on, known = _ship_date(shipment, order, where) if live else (None, True)
-        costs = [_item_cost(item, where, shipped_on, known) for item in live]
+        compared = _ship_date(shipment, order, where) if live else None
+        costs = [_item_cost(item, where, compared) for item in live]
         groups.append((shipment, costs))
     costs = [c for _, group in groups for c in group]
 
@@ -595,7 +623,7 @@ def _cancelled(item, where: str) -> bool:
     return flag
 
 
-def _item_cost(item, order_where, shipped_on: date, ship_date_known: bool) -> _ItemCost:
+def _item_cost(item, order_where, compared: _ComparedDate) -> _ItemCost:
     position = _get(item, "position", int, order_where)
     where = f"{order_where} #{position}"
     short_name = _get(item, "short_name", str, where).strip()
@@ -608,7 +636,7 @@ def _item_cost(item, order_where, shipped_on: date, ship_date_known: bool) -> _I
     own_tax = (None if item.get("tax") is None
                else _money(item["tax"], f"{where} tax"))
     return _ItemCost(position, short_name, quantity, unit_price, quantity * unit_price,
-                     own_tax, shipped_on, ship_date_known)
+                     own_tax, compared)
 
 
 def _spread(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
@@ -646,7 +674,7 @@ def _item_row(cost: _ItemCost, key: str, order_date: date, account: str) -> Tran
         account=account,
         amount_formula=f"={formula}",
         key=key,
-        note_suffix="" if cost.ship_date_known else UNKNOWN_SHIP_DATE_NOTE,
+        note_suffix="" if cost.compared.is_ship_date else UNKNOWN_SHIP_DATE_NOTE,
     )
 
 

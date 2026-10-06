@@ -1,5 +1,7 @@
 from datetime import date
 from unittest.mock import MagicMock, patch
+
+import pytest
 from models import Transaction
 from sheets_writer import build_row
 
@@ -94,3 +96,7 @@ def test_get_credentials_handles_refresh_error(mock_flow_cls, mock_creds_cls, mo
     assert res == new_creds
     flow_instance.run_local_server.assert_called_once()
 
+
+def test_build_row_refuses_a_note_suffix_without_a_key():
+    with pytest.raises(AssertionError):
+        build_row(_txn(note_suffix=" (ship date unknown)"))

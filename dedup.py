@@ -101,7 +101,8 @@ def existing_keys_from_rows(rows: list[list]) -> Counter:
 def amazon_classifications(rows: list[list]) -> dict[str, tuple]:
     """Map each Amazon Item key (or Whole Foods Order key) in the sheet to its
     row's raw (Send to Splitwise, For who) cells, cols E and H, so a Refund can
-    copy them. Refund rows are not Item rows and are ignored. The first row wins if an Item appears twice.
+    copy them. Refund rows are not Item or Order rows and are ignored. The first
+    row wins if a key appears twice.
     Values are checked only when a Refund uses them, so one odd cell never
     blocks an unrelated import."""
     found: dict[str, tuple] = {}

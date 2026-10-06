@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (Tracer bullet: one simple Amazon Order becomes one Item row), 04 (Readiness and the ship-date cutoff)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Each Refund becomes a row with a plain negative amount (the refund amount Amazon shows), dated on the refund date.
 - [x] Notes hold `split-transactions automation amazon <order number> #<position> refund <refund date> <amount>`. Re-scrapes don't duplicate Refunds, and several partial refunds on one Item stay distinct.

@@ -23,6 +23,7 @@ def _k_note(detail: str) -> str:
 
 
 def build_row(txn: Transaction) -> list:
+    assert txn.key or not txn.note_suffix, "note_suffix goes after a key; this row has none"
     # Amazon Item rows carry a formula, a stable key, and (for Refunds) an explicit
     # classification. Card rows leave all three unset and keep today's shape.
     return [

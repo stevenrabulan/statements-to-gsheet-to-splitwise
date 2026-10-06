@@ -4,11 +4,11 @@
 
 **Blocked by:** 02 (Tracer bullet: one simple Amazon Order becomes one Item row)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An Order is processed only when every non-cancelled Item's shipment has shipped. Otherwise it is skipped with the reason "not ready" and shown in the summary.
-- [ ] Cancelled Items are dropped and play no part in the tax spread or the total check.
-- [ ] Items whose shipment ship date is before the Amazon entry's Cutoff Date are skipped and counted in the summary.
-- [ ] An Order placed before the Cutoff Date but shipped on or after it is imported.
-- [ ] The CLI's generic cutoff (which compares the row date) is not applied a second time to Amazon rows.
-- [ ] Tested at the adapter seam (readiness, cancelled Items, the ship-date boundary) and at the CLI seam (no double cutoff).
+- [x] An Order is processed only when every non-cancelled Item's shipment has shipped. Otherwise it is skipped with the reason "not ready" and shown in the summary.
+- [x] Cancelled Items are dropped and play no part in the tax spread or the total check.
+- [x] Items whose shipment ship date is before the Amazon entry's Cutoff Date are skipped and counted in the summary.
+- [x] An Order placed before the Cutoff Date but shipped on or after it is imported.
+- [x] The CLI's generic cutoff (which compares the row date) is not applied a second time to Amazon rows.
+- [x] Tested at the adapter seam (readiness, cancelled Items, the ship-date boundary) and at the CLI seam (no double cutoff).
