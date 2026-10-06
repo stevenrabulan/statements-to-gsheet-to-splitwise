@@ -6,6 +6,12 @@ Drop your **real account exports** (CSV or PDF statements, plus scraped Amazon O
 
 (Synthetic test data lives separately under `tests/fixtures/` and is safe to commit.)
 
+**The pipeline has three parts:**
+
+1. **This importer** (Python) reads the exports and appends rows to the sheet.
+2. **The Google Sheet** is where each row gets classified: who it is for, and whether it goes to Splitwise. [Make your own copy of the template sheet](https://docs.google.com/spreadsheets/d/1XgqbbwzcgJeNHiM9I2AZKugZTXbdulhn9SlL1yVoU0Y/copy). It holds sample rows imported from `tests/fixtures/`.
+3. **A Make.com scenario** sends ticked rows to Splitwise. See [From the sheet to Splitwise](#from-the-sheet-to-splitwise).
+
 ---
 
 ## Layout: One Folder per Month
@@ -219,7 +225,37 @@ Returns and partial refunds arrive on a later scrape as **negative rows** dated 
 
 New Amazon rows default to **Shared** (Column E "Send to Splitwise" ticked, "For who" as card rows get). After importing:
 - **Personal** Item: untick "Send to Splitwise" (E). The row stays recorded so you can reclassify later.
-- **Partner's** Item: set "For who" (H) to Partner.
+- **Partner's** Item: set "For who" (H) to Partner 2 (the template sheet calls the two people Partner 1 and Partner 2).
+
+---
+
+## From the Sheet to Splitwise
+
+The importer never talks to Splitwise. A [Make.com](https://www.make.com) scenario does, on a schedule. Its blueprint is in [`make/splitwise-sync.blueprint.json`](make/splitwise-sync.blueprint.json).
+
+On each run the scenario:
+
+1. Reads cell `M2`, the last row it sent.
+2. Finds rows with "Send to Splitwise" (E) ticked and "Done" (F) unticked, oldest Order Date first, up to 200.
+3. Skips rows with "Exclude" (D) ticked, and rows more than 30 rows before the row in `M2`. Old rows that were never sent stay unsent.
+4. Creates one Splitwise expense per row in a fixed group: Item (C) as the description, Notes (K) in the details.
+5. Ticks "Done" (F) on the row and writes its row number to `M2`.
+
+**How "For who" changes the expense:**
+
+| "For who" (H) | Cost sent to Splitwise | Module settings |
+| :--- | :--- | :--- |
+| Partner 2 | Amount (B) doubled | `split_equally` off, `payment` on |
+| Anything else | Amount (B) | `split_equally` on, `payment` off |
+
+Doubling is a workaround: it is how the scenario gets Splitwise to charge Partner 2 the full amount. The expense details say so, since the cost shown in Splitwise is not the real price.
+
+### Use the blueprint
+
+1. In Make.com, create a scenario, open the `...` menu, and choose **Import Blueprint**.
+2. On each module, pick your own Google and Splitwise connections.
+3. Replace `YOUR_SPREADSHEET_ID` on the four Google Sheets modules and choose your Splitwise group on the "Create an Expense" module.
+4. Set a schedule. The blueprint does not carry one.
 
 ---
 
